@@ -1,0 +1,10 @@
+[build]
+  publish = "frontend"
+  command = "printf 'const CONFIG = {\n  API_BASE_URL: \"%s\",\n  API_KEY: \"%s\",\n  GOOGLE_CLIENT_ID: \"%s\"\n};\n' \"$JOBMATCH_API_URL\" \"$JOBMATCH_API_KEY\" \"$JOBMATCH_GOOGLE_CLIENT_ID\" > frontend/config.js"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"

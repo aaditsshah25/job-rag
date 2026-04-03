@@ -1,0 +1,53 @@
+name: Deploy JobMatch AI
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install fastapi pydantic python-dotenv openai pinecone pandas
+      - run: python -c "import backend; print('Import OK')"
+
+  deploy-backend:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install -g @railway/cli
+      - run: railway up --service backend
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+  deploy-frontend:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Write frontend runtime config
+        run: |
+          printf "const CONFIG = {\n  API_BASE_URL: '%s',\n  API_KEY: '%s',\n  GOOGLE_CLIENT_ID: '%s'\n};\n" "$JOBMATCH_API_URL" "$JOBMATCH_API_KEY" "$JOBMATCH_GOOGLE_CLIENT_ID" > frontend/config.js
+        env:
+          JOBMATCH_API_URL: ${{ secrets.JOBMATCH_API_URL }}
+          JOBMATCH_API_KEY: ${{ secrets.JOBMATCH_API_KEY }}
+          JOBMATCH_GOOGLE_CLIENT_ID: ${{ secrets.JOBMATCH_GOOGLE_CLIENT_ID }}
+      - run: npm install -g netlify-cli
+      - run: netlify deploy --prod --dir frontend
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          JOBMATCH_API_URL: ${{ secrets.JOBMATCH_API_URL }}
+          JOBMATCH_API_KEY: ${{ secrets.JOBMATCH_API_KEY }}
+          JOBMATCH_GOOGLE_CLIENT_ID: ${{ secrets.JOBMATCH_GOOGLE_CLIENT_ID }}

@@ -50,6 +50,18 @@
         <p class="panel-subtitle">Tell us about yourself and we'll find the best matches</p>
       </div>
 
+      <div class="auth-card">
+        <div class="auth-copy">
+          <h3>Account</h3>
+          <p id="authStatus">Sign in with Google to load and save your profile.</p>
+        </div>
+        <div id="googleSignInButton" class="google-signin-slot"></div>
+        <div class="auth-actions">
+          <button type="button" class="btn-secondary" id="saveProfileBtn">Save Profile</button>
+          <button type="button" class="btn-secondary hidden" id="signOutBtn">Sign Out</button>
+        </div>
+      </div>
+
       <!-- Resume Upload -->
       <div id="resume-dropzone" class="resume-dropzone">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -267,6 +279,8 @@
         <div class="results-header">
           <h2>Your Job Matches</h2>
           <button class="btn-secondary" id="clearBtn">Clear Results</button>
+          <button class="btn-secondary" id="trackerBtn" style="display:none">Application Tracker</button>
+          <button class="btn-secondary" id="subscribeAlertsBtn" style="display:none">Subscribe Alerts</button>
           <button class="btn-secondary" id="emailResultsBtn" style="display:none">Email My Results</button>
         </div>
         <div id="results-content"></div>
@@ -284,7 +298,7 @@
   <div id="coverLetterModal" class="modal-overlay hidden">
     <div class="modal-box">
       <div class="modal-header">
-        <h3>Cover Letter</h3>
+        <h3 id="coverLetterTitle">Cover Letter</h3>
         <button class="modal-close" id="closeCoverLetter">&times;</button>
       </div>
       <div class="modal-body">
@@ -297,6 +311,24 @@
     </div>
   </div>
 
+  <!-- Application Tracker Modal -->
+  <div id="trackerModal" class="modal-overlay hidden">
+    <div class="modal-box tracker-modal-box">
+      <div class="modal-header">
+        <h3>Application Tracker</h3>
+        <button class="modal-close" id="closeTrackerModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="trackerContent" class="tracker-content"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="refreshTrackerBtn">Refresh</button>
+        <button class="btn-secondary" id="closeTrackerModalBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="config.js"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
