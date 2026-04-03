@@ -76,6 +76,16 @@ rag/
 | `POST` | `/webhook` | Main job-match endpoint (used by frontend) |
 | `POST` | `/index?force=true` | Re-index the CSV dataset into Pinecone |
 
+### Multi-source enrichment
+
+The backend can enrich the index with external sources so the database is much richer.
+
+1. Set `ENABLE_EXTERNAL_SOURCES=true` in `.env`
+2. Configure one or more provider credentials/tokens in `.env`
+3. Run `POST /index?force=true`
+
+Reference source list and setup details: `SOURCES.md`
+
 ### Webhook request/response
 
 ```json

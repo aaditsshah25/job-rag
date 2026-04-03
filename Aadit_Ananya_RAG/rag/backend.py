@@ -47,6 +47,7 @@ from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
 import aiosqlite
+from source_ingestion import fetch_configured_sources
 
 try:
     from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -792,8 +793,22 @@ def job_to_text(job: dict) -> str:
         f"Benefits: {', '.join(job['benefits'][:8])}",
         f"Description: {job['description'][:400]}",
         f"Responsibilities: {job['responsibilities'][:300]}",
+        f"Source: {job.get('source', 'local_csv')}",
+        f"URL: {job.get('external_url', '')}",
     ]
     return "\n".join(p for p in parts if not p.endswith(": "))
+
+
+def _stable_job_vector_id(job: dict, fallback_idx: int) -> str:
+    base_id = _safe_str(job.get("job_id"))
+    if base_id:
+        return f"job_{base_id}_{fallback_idx}"
+    raw = (
+        f"{job.get('source','local_csv')}|{job.get('title','')}|"
+        f"{job.get('company','')}|{job.get('location','')}|{job.get('external_url','')}"
+    )
+    short_hash = hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
+    return f"job_{short_hash}_{fallback_idx}"
 
 def get_or_create_index():
     client = get_pinecone()
@@ -822,6 +837,11 @@ def index_dataset(force: bool = False) -> int:
     df = pd.read_csv(CSV_PATH)
     log.info("Loaded %d rows.", len(df))
     jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
+    external_jobs = fetch_configured_sources()
+    if external_jobs:
+        log.info("Loaded %d external listings from configured sources.", len(external_jobs))
+        jobs.extend(external_jobs)
+    log.info("Total listings to index: %d", len(jobs))
     EMBED_BATCH = 96
     UPSERT_BATCH = 100
     batches = [jobs[i: i + EMBED_BATCH] for i in range(0, len(jobs), EMBED_BATCH)]
@@ -834,7 +854,7 @@ def index_dataset(force: bool = False) -> int:
         embeddings = embed_texts(texts)
         vectors = []
         for idx2, (job, emb) in enumerate(zip(batch, embeddings)):
-            vid = f"job_{job['job_id']}_{offset + idx2}"
+            vid = _stable_job_vector_id(job, offset + idx2)
             meta = {
                 "title": job["title"], "role": job["role"], "company": job["company"],
                 "location": job["location"], "country": job["country"], "work_type": job["work_type"],
@@ -843,6 +863,7 @@ def index_dataset(force: bool = False) -> int:
                 "skills": job["skills"][:20], "benefits": job["benefits"][:10],
                 "description": job["description"][:500], "responsibilities": job["responsibilities"][:300],
                 "sector": job["sector"], "industry": job["industry"], "company_size": job["company_size"],
+                "source": job.get("source", "local_csv"), "external_url": job.get("external_url", ""),
             }
             vectors.append({"id": vid, "values": emb, "metadata": meta})
         return vectors
