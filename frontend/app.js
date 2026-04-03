@@ -177,8 +177,7 @@ async function sendToBackend(profile) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60000);
 
-  const headers = { 'Content-Type': 'application/json' };
-  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+  const headers = AUTH.headers();
 
   let res;
   try {
@@ -310,8 +309,7 @@ if (emailResultsBtn) {
       return;
     }
     const resultsMarkdown = resultsContent.innerText || resultsContent.textContent || '';
-    const headers = { 'Content-Type': 'application/json' };
-    if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+    const headers = AUTH.headers();
     try {
       emailResultsBtn.disabled = true;
       emailResultsBtn.textContent = 'Sending...';
@@ -354,8 +352,8 @@ async function handleResumeUpload(file) {
 
   const formData = new FormData();
   formData.append('file', file);
-  const headers = {};
-  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+  const headers = AUTH.headers({ 'Content-Type': undefined });
+  delete headers['Content-Type']; // let browser set multipart boundary
 
   try {
     const res = await fetch(CONFIG.API_BASE_URL + '/parse-resume', {
@@ -429,8 +427,7 @@ if (resumeDropzone) {
 // ─── BOOKMARK FUNCTIONALITY ──────────────────────────
 async function saveBookmark(jobTitle, company, location, salary, matchScore) {
   const bookmarkKey = jobTitle + '|' + company;
-  const headers = { 'Content-Type': 'application/json' };
-  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+  const headers = AUTH.headers();
   try {
     await fetch(CONFIG.API_BASE_URL + '/bookmark', {
       method: 'POST',
@@ -504,8 +501,7 @@ async function generateCoverLetter(jobTitle, company, jobDescription) {
   if (coverLetterContent) coverLetterContent.textContent = 'Generating cover letter...';
   if (coverLetterModal) coverLetterModal.classList.remove('hidden');
 
-  const headers = { 'Content-Type': 'application/json' };
-  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+  const headers = AUTH.headers();
 
   try {
     const res = await fetch(CONFIG.API_BASE_URL + '/cover-letter', {

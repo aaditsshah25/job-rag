@@ -76,6 +76,12 @@ try:
 except ImportError:
     _APSCHEDULER_AVAILABLE = False
 
+try:
+    from jose import jwt as jose_jwt, JWTError
+    _JOSE_AVAILABLE = True
+except ImportError:
+    _JOSE_AVAILABLE = False
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -100,6 +106,9 @@ DB_PATH           = os.getenv("DB_PATH", "./data/jobmatch.db")
 JOBMATCH_API_KEY  = os.getenv("JOBMATCH_API_KEY", "")
 RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
+JWT_SECRET        = os.getenv("JWT_SECRET", "change-me-in-production")
+JWT_ALGORITHM     = "HS256"
+JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
 # ─── Lazy singletons ──────────────────────────────────
 _openai_client = None
@@ -163,6 +172,32 @@ async def verify_api_key(request: Request):
     key = request.headers.get("X-Api-Key", "")
     if key != JOBMATCH_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+# ─── JWT helpers ──────────────────────────────────────
+def _create_jwt(email: str, name: str, picture: str) -> str:
+    if not _JOSE_AVAILABLE:
+        return ""
+    expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS)
+    payload = {"sub": email, "name": name, "picture": picture, "exp": expire}
+    return jose_jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def _decode_jwt(token: str) -> dict:
+    if not _JOSE_AVAILABLE:
+        raise HTTPException(status_code=503, detail="JWT library not available")
+    try:
+        return jose_jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except JWTError as exc:
+        raise HTTPException(status_code=401, detail=f"Invalid or expired token: {exc}")
+
+async def verify_jwt(request: Request):
+    """Dependency: verifies Bearer JWT. Only enforced when GOOGLE_CLIENT_ID is set."""
+    if not GOOGLE_CLIENT_ID:
+        return  # auth not configured — open access
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    token = auth_header[7:]
+    _decode_jwt(token)
 
 # ─── Database init ────────────────────────────────────
 async def _ensure_column(db: aiosqlite.Connection, table_name: str, column_name: str, column_ddl: str):
@@ -1049,7 +1084,7 @@ async def health():
     return {"status": "ok", "version": "2.0.0"}
 
 
-@app.post("/webhook", response_model=WebhookResponse, dependencies=[Depends(verify_api_key)])
+@app.post("/webhook", response_model=WebhookResponse, dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 @limiter.limit("10/minute")
 async def webhook(request: Request, req: WebhookRequest):
     request_id = str(uuid.uuid4())[:8]
@@ -1101,7 +1136,7 @@ async def index_endpoint(force: bool = False, _: None = Depends(verify_api_key))
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/parse-resume", dependencies=[Depends(verify_api_key)])
+@app.post("/parse-resume", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def parse_resume(file: UploadFile = File(...)):
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
@@ -1151,7 +1186,7 @@ Resume text:
     return parsed
 
 
-@app.post("/resume-tailor", dependencies=[Depends(verify_api_key)])
+@app.post("/resume-tailor", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def resume_tailor(req: ResumeTailorRequest):
     focus = ", ".join(req.focusAreas) if req.focusAreas else "summary, experience bullets, and ATS keywords"
     prompt = f"""You are an expert resume strategist.
@@ -1193,7 +1228,7 @@ Rules:
     return {"tailored_resume": response.choices[0].message.content.strip()}
 
 
-@app.post("/cover-letter", dependencies=[Depends(verify_api_key)])
+@app.post("/cover-letter", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def generate_cover_letter(req: CoverLetterRequest):
     skills_str = ", ".join(req.profile.skills[:10]) if req.profile.skills else "various technical skills"
     prompt = f"""Write a compelling 3-paragraph cover letter for {req.profile.name or 'the applicant'} applying to the {req.jobTitle} position at {req.company}.
@@ -1219,7 +1254,7 @@ Write exactly 3 paragraphs: (1) opening hook with role and key qualification, (2
     return {"cover_letter": response.choices[0].message.content.strip()}
 
 
-@app.post("/interview-prep", dependencies=[Depends(verify_api_key)])
+@app.post("/interview-prep", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def interview_prep(req: InterviewPrepRequest):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -1275,7 +1310,7 @@ Make advice practical and stage-specific.
     }
 
 
-@app.post("/bookmark", dependencies=[Depends(verify_api_key)])
+@app.post("/bookmark", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def save_bookmark(req: BookmarkRequest):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -1288,7 +1323,7 @@ async def save_bookmark(req: BookmarkRequest):
     return {"status": "saved"}
 
 
-@app.get("/bookmarks/{session_id}", dependencies=[Depends(verify_api_key)])
+@app.get("/bookmarks/{session_id}", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def get_bookmarks(session_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -1305,7 +1340,7 @@ async def get_bookmarks(session_id: str):
     return {"bookmarks": result}
 
 
-@app.post("/feedback", dependencies=[Depends(verify_api_key)])
+@app.post("/feedback", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def submit_feedback(req: FeedbackRequest):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -1317,7 +1352,7 @@ async def submit_feedback(req: FeedbackRequest):
     return {"status": "ok"}
 
 
-@app.post("/applications", dependencies=[Depends(verify_api_key)])
+@app.post("/applications", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def create_application(req: ApplicationCreateRequest):
     now = datetime.utcnow().isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1346,7 +1381,7 @@ async def create_application(req: ApplicationCreateRequest):
     return {"status": "saved", "application_id": row[0] if row else None}
 
 
-@app.get("/applications/{session_id}", dependencies=[Depends(verify_api_key)])
+@app.get("/applications/{session_id}", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def get_applications(session_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -1360,7 +1395,7 @@ async def get_applications(session_id: str):
     return {"applications": [dict(row) for row in rows]}
 
 
-@app.patch("/applications/{application_id}", dependencies=[Depends(verify_api_key)])
+@app.patch("/applications/{application_id}", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def update_application(application_id: int, req: ApplicationUpdateRequest):
     if req.status is None and req.notes is None:
         raise HTTPException(status_code=400, detail="Provide at least one field to update")
@@ -1398,7 +1433,7 @@ async def update_application(application_id: int, req: ApplicationUpdateRequest)
     return {"status": "updated"}
 
 
-@app.post("/alerts/subscribe", dependencies=[Depends(verify_api_key)])
+@app.post("/alerts/subscribe", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def subscribe_alerts(req: AlertSubscriptionRequest):
     frequency = req.frequency.lower().strip()
     if frequency not in {"daily", "weekly"}:
@@ -1425,7 +1460,7 @@ async def subscribe_alerts(req: AlertSubscriptionRequest):
     return {"status": "subscribed", "email": req.email.strip().lower(), "frequency": frequency}
 
 
-@app.get("/alerts/subscriptions/{email}", dependencies=[Depends(verify_api_key)])
+@app.get("/alerts/subscriptions/{email}", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def get_alert_subscription(email: str):
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
@@ -1445,7 +1480,7 @@ async def get_alert_subscription(email: str):
     return item
 
 
-@app.patch("/alerts/subscriptions/{email}", dependencies=[Depends(verify_api_key)])
+@app.patch("/alerts/subscriptions/{email}", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def update_alert_subscription(email: str, req: AlertSubscriptionUpdateRequest):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
@@ -1458,7 +1493,7 @@ async def update_alert_subscription(email: str, req: AlertSubscriptionUpdateRequ
     return {"status": "updated", "active": req.active}
 
 
-@app.post("/alerts/run", dependencies=[Depends(verify_api_key)])
+@app.post("/alerts/run", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def run_alerts(req: AlertRunRequest):
     frequency = req.frequency.lower().strip()
     if frequency not in {"auto", "daily", "weekly"}:
@@ -1485,15 +1520,18 @@ async def auth_google(req: GoogleAuthRequest):
         send_confirmation=True,
     )
 
+    access_token = _create_jwt(email, name, picture)
     return {
         "status": "ok",
         "user": user,
         "profile": profile.model_dump(),
         "email_verified": True,
+        "access_token": access_token,
+        "token_type": "bearer",
     }
 
 
-@app.post("/profile", dependencies=[Depends(verify_api_key)])
+@app.post("/profile", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def save_profile(req: ProfileUpsertRequest):
     user = await _upsert_user_profile(
         email=req.email,
@@ -1506,7 +1544,7 @@ async def save_profile(req: ProfileUpsertRequest):
     return {"status": "saved", "user": user}
 
 
-@app.get("/profile/{email}", dependencies=[Depends(verify_api_key)])
+@app.get("/profile/{email}", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def get_profile(email: str):
     normalized_email = _safe_str(email).lower()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -1527,12 +1565,12 @@ async def get_profile(email: str):
     return item
 
 
-@app.post("/score-breakdown", dependencies=[Depends(verify_api_key)])
+@app.post("/score-breakdown", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def score_breakdown(req: ScoreBreakdownRequest):
     return {"score_breakdown": compute_match_breakdown(req.profile, req.job)}
 
 
-@app.post("/send-results", dependencies=[Depends(verify_api_key)])
+@app.post("/send-results", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def send_results(req: SendResultsRequest):
     if not RESEND_API_KEY:
         raise HTTPException(status_code=503, detail="Email service not configured")

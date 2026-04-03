@@ -18,10 +18,124 @@
       margin-left: 2px;
       font-weight: 700;
     }
+
+    /* ─── Auth Gate ─── */
+    #auth-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg, #f4f6fb);
+      transition: opacity 0.3s;
+    }
+    #auth-gate.hidden { display: none; }
+    .auth-card {
+      background: var(--surface, #fff);
+      border: 1px solid var(--border, #e2e8f0);
+      border-radius: 20px;
+      padding: 48px 40px;
+      max-width: 400px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.10);
+    }
+    .auth-logo {
+      font-size: 1.6rem;
+      font-weight: 800;
+      margin-bottom: 8px;
+      color: var(--text-primary, #0f172a);
+    }
+    .auth-logo span { color: #6366f1; }
+    .auth-subtitle {
+      color: var(--text-secondary, #64748b);
+      font-size: 0.92rem;
+      margin-bottom: 32px;
+    }
+    .auth-user-info {
+      display: none;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface-alt, #f8fafc);
+      border: 1px solid var(--border, #e2e8f0);
+      border-radius: 12px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      text-align: left;
+    }
+    .auth-user-info img {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
+    .auth-user-name { font-weight: 600; font-size: 0.95rem; color: var(--text-primary, #0f172a); }
+    .auth-user-email { font-size: 0.8rem; color: var(--text-secondary, #64748b); }
+    .auth-sign-out {
+      display: none;
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--border, #e2e8f0);
+      border-radius: 10px;
+      background: transparent;
+      color: var(--text-secondary, #64748b);
+      font-size: 0.9rem;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+    .auth-sign-out:hover { background: var(--surface-alt, #f8fafc); }
+    #auth-header-user {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #auth-header-user img {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      object-fit: cover;
+      display: none;
+    }
+    #auth-header-name {
+      font-size: 0.85rem;
+      color: var(--text-secondary, #64748b);
+      display: none;
+    }
+    #signOutHeaderBtn {
+      display: none;
+      font-size: 0.8rem;
+      padding: 4px 10px;
+      border: 1px solid var(--border, #e2e8f0);
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text-secondary, #64748b);
+    }
   </style>
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 
 <body>
+
+  <!-- ─── AUTH GATE ─── -->
+  <div id="auth-gate">
+    <div class="auth-card">
+      <div class="auth-logo">JobMatch<span>AI</span></div>
+      <p class="auth-subtitle">RAG-powered job matching — sign in to continue</p>
+      <div class="auth-user-info" id="authUserInfo">
+        <img id="authUserPic" src="" alt="" />
+        <div>
+          <div class="auth-user-name" id="authUserName"></div>
+          <div class="auth-user-email" id="authUserEmail"></div>
+        </div>
+      </div>
+      <!-- Google One Tap / Sign-In button rendered here -->
+      <div id="google-signin-btn"></div>
+      <button class="auth-sign-out" id="authSignOutBtn">Sign out</button>
+    </div>
+  </div>
 
   <!-- ─── HEADER ─── -->
   <header id="app-header">
@@ -34,6 +148,11 @@
         <span class="logo-text">JobMatch<span class="logo-accent">AI</span></span>
       </div>
       <p class="tagline">RAG-Powered Job Recommendations</p>
+      <div id="auth-header-user">
+        <img id="headerUserPic" src="" alt="" />
+        <span id="auth-header-name"></span>
+        <button id="signOutHeaderBtn" title="Sign out">Sign out</button>
+      </div>
       <button id="darkModeToggle" class="btn-secondary dark-mode-btn" title="Toggle dark mode">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
       </button>
@@ -299,6 +418,7 @@
 
   <script src="config.js"></script>
   <script src="data.js"></script>
+  <script src="auth.js"></script>
   <script src="app.js"></script>
 </body>
 
