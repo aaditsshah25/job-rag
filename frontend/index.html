@@ -34,6 +34,9 @@
         <span class="logo-text">JobMatch<span class="logo-accent">AI</span></span>
       </div>
       <p class="tagline">RAG-Powered Job Recommendations</p>
+      <button id="darkModeToggle" class="btn-secondary dark-mode-btn" title="Toggle dark mode">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+      </button>
     </div>
   </header>
 
@@ -45,6 +48,14 @@
       <div class="panel-header">
         <h2>Your Profile</h2>
         <p class="panel-subtitle">Tell us about yourself and we'll find the best matches</p>
+      </div>
+
+      <!-- Resume Upload -->
+      <div id="resume-dropzone" class="resume-dropzone">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <span>Drop your resume PDF here or <label for="resumeFile" class="resume-link">browse</label></span>
+        <input type="file" id="resumeFile" accept=".pdf" style="display:none" />
+        <span id="resumeStatus" class="resume-status"></span>
       </div>
 
       <form id="profile-form" autocomplete="off">
@@ -256,6 +267,7 @@
         <div class="results-header">
           <h2>Your Job Matches</h2>
           <button class="btn-secondary" id="clearBtn">Clear Results</button>
+          <button class="btn-secondary" id="emailResultsBtn" style="display:none">Email My Results</button>
         </div>
         <div id="results-content"></div>
       </div>
@@ -268,6 +280,24 @@
   <footer id="app-footer">
   </footer>
 
+  <!-- Cover Letter Modal -->
+  <div id="coverLetterModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Cover Letter</h3>
+        <button class="modal-close" id="closeCoverLetter">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="coverLetterContent" class="cover-letter-text"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="copyCoverLetter">Copy to Clipboard</button>
+        <button class="btn-secondary" id="closeCoverLetterBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="config.js"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
 </body>

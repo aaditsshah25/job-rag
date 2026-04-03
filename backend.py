@@ -1,11 +1,17 @@
 """
-JobMatch AI — Python Backend
+JobMatch AI — Python Backend v2.0.0
 RAG pipeline: CSV → Pinecone (embeddings) → GPT-4o (ranking & response)
 
 Endpoints:
-  POST /webhook   — accepts {chatInput, sessionId}, returns {output: "...markdown..."}
-  GET  /health    — health check
-  POST /index     — (re)index the CSV dataset into Pinecone
+  POST /webhook          — accepts {profile, sessionId} or {chatInput, sessionId}
+  GET  /health           — health check
+  POST /index            — (re)index the CSV dataset into Pinecone
+  POST /parse-resume     — extract structured profile from PDF resume
+  POST /cover-letter     — generate a tailored cover letter
+  POST /bookmark         — save a bookmarked job
+  GET  /bookmarks/{sid}  — retrieve bookmarks for a session
+  POST /feedback         — submit job rating/feedback
+  POST /send-results     — email results via Resend API
 """
 
 import os
@@ -14,127 +20,351 @@ import json
 import math
 import ast
 import logging
+import hashlib
+import uuid
+import io
+from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
+from cachetools import TTLCache
+import aiosqlite
+
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    _SLOWAPI_AVAILABLE = True
+except ImportError:
+    _SLOWAPI_AVAILABLE = False
+
+try:
+    import pdfplumber
+    _PDFPLUMBER_AVAILABLE = True
+except ImportError:
+    _PDFPLUMBER_AVAILABLE = False
+
+try:
+    import resend as resend_lib
+    _RESEND_AVAILABLE = True
+except ImportError:
+    _RESEND_AVAILABLE = False
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────
-# Config
-# ──────────────────────────────────────────────────────────
+# ─── Config ───────────────────────────────────────────
 OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
 PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY", "")
 PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
-EMBED_MODEL       = "text-embedding-3-small"   # 1536-dim, cheap & fast
+EMBED_MODEL       = "text-embedding-3-small"
 CHAT_MODEL        = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
-TOP_K             = int(os.getenv("TOP_K", "20"))          # candidates from Pinecone
-TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))   # jobs shown to user
+TOP_K             = int(os.getenv("TOP_K", "20"))
+TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
 CSV_PATH          = os.getenv(
     "CSV_PATH",
     os.path.join(os.path.dirname(__file__), "GENAI_RAG_Dataset - Sheet1.csv")
 )
+DB_PATH           = os.getenv("DB_PATH", "./data/jobmatch.db")
+JOBMATCH_API_KEY  = os.getenv("JOBMATCH_API_KEY", "")
+RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
+FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
 
-# ──────────────────────────────────────────────────────────
-# Clients (lazy-initialized so missing keys don't crash import)
-# ──────────────────────────────────────────────────────────
+# ─── Lazy singletons ──────────────────────────────────
 _openai_client = None
 _pc = None
-
 
 def get_openai() -> OpenAI:
     global _openai_client
     if _openai_client is None:
         if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is not set. Please add it to your .env file.")
+            raise RuntimeError("OPENAI_API_KEY is not set.")
         _openai_client = OpenAI(api_key=OPENAI_API_KEY)
     return _openai_client
-
 
 def get_pinecone() -> Pinecone:
     global _pc
     if _pc is None:
         if not PINECONE_API_KEY:
-            raise RuntimeError("PINECONE_API_KEY is not set. Please add it to your .env file.")
+            raise RuntimeError("PINECONE_API_KEY is not set.")
         _pc = Pinecone(api_key=PINECONE_API_KEY)
     return _pc
 
+# ─── Search cache (TTL 10 min) ────────────────────────
+_search_cache: TTLCache = TTLCache(maxsize=200, ttl=600)
 
-# ──────────────────────────────────────────────────────────
-# Data helpers
-# ──────────────────────────────────────────────────────────
+# ─── Session history (in-memory, 60-min TTL) ──────────
+_sessions: dict[str, list] = {}
+_session_expiry: dict[str, datetime] = {}
+SESSION_TTL_MINUTES = 60
+
+def get_session_history(session_id: str) -> list:
+    if session_id in _session_expiry and datetime.utcnow() > _session_expiry[session_id]:
+        _sessions.pop(session_id, None)
+        _session_expiry.pop(session_id, None)
+    return _sessions.get(session_id, [])
+
+def save_session_turn(session_id: str, user_msg: str, assistant_msg: str):
+    if session_id not in _sessions:
+        _sessions[session_id] = []
+    _sessions[session_id].append({"role": "user", "content": user_msg})
+    _sessions[session_id].append({"role": "assistant", "content": assistant_msg})
+    if len(_sessions[session_id]) > 40:
+        _sessions[session_id] = _sessions[session_id][-40:]
+    _session_expiry[session_id] = datetime.utcnow() + timedelta(minutes=SESSION_TTL_MINUTES)
+
+# ─── Rate limiter ─────────────────────────────────────
+if _SLOWAPI_AVAILABLE:
+    limiter = Limiter(key_func=get_remote_address)
+else:
+    # Stub limiter for when slowapi is not installed
+    class _StubLimiter:
+        def limit(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+    limiter = _StubLimiter()
+
+# ─── API Key auth ─────────────────────────────────────
+async def verify_api_key(request: Request):
+    if not JOBMATCH_API_KEY:
+        return  # no auth configured
+    key = request.headers.get("X-Api-Key", "")
+    if key != JOBMATCH_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+# ─── Database init ────────────────────────────────────
+async def init_db():
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                job_title TEXT,
+                company TEXT,
+                location TEXT,
+                salary TEXT,
+                match_score REAL,
+                job_data TEXT,
+                created_at TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS feedback (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                job_title TEXT,
+                company TEXT,
+                rating INTEGER,
+                comment TEXT,
+                created_at TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS applications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                job_title TEXT,
+                company TEXT,
+                status TEXT DEFAULT 'saved',
+                notes TEXT,
+                applied_at TEXT,
+                created_at TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS alert_subscriptions (
+                email TEXT PRIMARY KEY,
+                name TEXT,
+                profile_json TEXT,
+                frequency TEXT DEFAULT 'weekly',
+                active INTEGER DEFAULT 1,
+                created_at TEXT
+            )
+        """)
+        await db.commit()
+
+# ─── Lifespan ─────────────────────────────────────────
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    if OPENAI_API_KEY and PINECONE_API_KEY:
+        try:
+            index_dataset(force=False)
+        except Exception as e:
+            log.error("Auto-index failed: %s", e)
+    yield
+
+# ─── FastAPI App ──────────────────────────────────────
+app = FastAPI(title="JobMatch AI Backend", version="2.0.0", lifespan=lifespan)
+
+if _SLOWAPI_AVAILABLE:
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ─── Global exception handler ─────────────────────────
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    log.exception("Unhandled exception on %s", request.url)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
+# ─── Pydantic Models ──────────────────────────────────
+class UserProfile(BaseModel):
+    name: str = ""
+    email: str = ""
+    desiredRole: str = ""
+    experience: int = 0
+    skills: list[str] = []
+    education: str = ""
+    industry: str = ""
+    location: str = ""
+    workType: str = "Any"
+    salaryMin: Optional[int] = None
+    companySize: str = "Any"
+    benefits: list[str] = []
+    workAuth: str = "Not Specified"
+    additional: str = ""
+
+class WebhookRequest(BaseModel):
+    chatInput: Optional[str] = None
+    profile: Optional[UserProfile] = None
+    sessionId: Optional[str] = None
+
+class WebhookResponse(BaseModel):
+    output: str
+
+class BookmarkRequest(BaseModel):
+    session_id: str
+    job_title: str
+    company: str
+    location: str = ""
+    salary: str = ""
+    match_score: float = 0.0
+    job_data: dict = {}
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    job_title: str
+    company: str
+    rating: int  # 1-5
+    comment: str = ""
+
+class CoverLetterRequest(BaseModel):
+    profile: UserProfile
+    jobTitle: str
+    company: str
+    jobDescription: str = ""
+    tone: str = "professional"
+
+class SendResultsRequest(BaseModel):
+    email: str
+    name: str
+    results_markdown: str
+
+# ─── Profile query builder ────────────────────────────
+def build_query_from_profile(profile: UserProfile) -> str:
+    parts = ["I'm looking for job recommendations. Here is my profile:"]
+    if profile.name:
+        parts.append(f"Name: {profile.name}")
+    if profile.desiredRole:
+        parts.append(f"Desired Role: {profile.desiredRole}")
+    if profile.experience:
+        parts.append(f"Years of Experience: {profile.experience}")
+    if profile.skills:
+        parts.append(f"Key Skills: {', '.join(profile.skills)}")
+    if profile.education:
+        parts.append(f"Education: {profile.education}")
+    if profile.industry:
+        parts.append(f"Preferred Industry: {profile.industry}")
+    if profile.location:
+        parts.append(f"Preferred Location: {profile.location}")
+    if profile.workType and profile.workType != "Any":
+        parts.append(f"Work Type Preference: {profile.workType}")
+    if profile.salaryMin:
+        parts.append(f"Minimum Salary: ${profile.salaryMin:,} per year")
+    if profile.companySize and profile.companySize != "Any":
+        parts.append(f"Company Size Preference: {profile.companySize}")
+    if profile.benefits:
+        parts.append(f"Benefits Priorities: {', '.join(profile.benefits)}")
+    if profile.workAuth and profile.workAuth != "Not Specified":
+        parts.append(f"Work Authorization Status: {profile.workAuth}")
+    if profile.additional:
+        parts.append(f"Additional Preferences:\n{profile.additional}")
+    parts.append("Please find the best matching jobs for my profile from the available postings.")
+    return "\n".join(parts)
+
+# ─── Data cleaning utilities ──────────────────────────
 def _safe_str(val) -> str:
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return ""
     return str(val).strip()
 
-
 def _parse_salary(raw: str) -> str:
-    """Normalise '$59K-$99K' or '50000-80000' into a readable string."""
     raw = _safe_str(raw)
     if not raw:
         return ""
     raw = raw.replace("$", "").replace(",", "")
-    m = re.match(r"(\d+\.?\d*)[Kk]?\s*[-–]\s*(\d+\.?\d*)[Kk]?", raw)
+    m = re.match(r"(\d+\.?\d*)[Kk]?\s*[-\u2013]\s*(\d+\.?\d*)[Kk]?", raw)
     if m:
         lo, hi = m.group(1), m.group(2)
-        # If original had K suffix expand
         if "K" in _safe_str(raw).upper():
             lo = f"${int(float(lo) * 1000):,}"
             hi = f"${int(float(hi) * 1000):,}"
         else:
             lo = f"${int(float(lo)):,}"
             hi = f"${int(float(hi)):,}"
-        return f"{lo} – {hi}/yr"
+        return f"{lo} \u2013 {hi}/yr"
     return raw
-
 
 def _parse_experience(raw: str) -> str:
     raw = _safe_str(raw)
     if not raw:
         return ""
-    # "5 to 15 Years" → "5–15 yrs"
     m = re.match(r"(\d+)\s+to\s+(\d+)\s+[Yy]ears?", raw)
     if m:
-        return f"{m.group(1)}–{m.group(2)} yrs"
+        return f"{m.group(1)}\u2013{m.group(2)} yrs"
     return raw
-
 
 def _parse_benefits(raw: str) -> list[str]:
     raw = _safe_str(raw)
     if not raw:
         return []
-    # Strip outer braces/quotes from dict-like string
     raw = raw.strip("{}'\"")
     return [b.strip().strip("'\"") for b in raw.split(",") if b.strip()]
-
 
 def _parse_skills(raw: str) -> list[str]:
     raw = _safe_str(raw)
     if not raw:
         return []
-    # Remove parenthetical qualifiers e.g. "(e.g., React, Angular)"
     raw = re.sub(r"\([^)]*\)", "", raw)
     return [s.strip() for s in re.split(r"[,\n]", raw) if s.strip()]
-
 
 def _parse_company_profile(raw: str) -> dict:
     raw = _safe_str(raw)
     if not raw:
         return {}
     try:
-        # JSON-ish string with possible Python-style single quotes
         return json.loads(raw)
     except Exception:
         try:
@@ -142,38 +372,33 @@ def _parse_company_profile(raw: str) -> dict:
         except Exception:
             return {}
 
-
-def clean_row(row: pd.Series) -> dict:
-    """Return a normalised job dict from a CSV row."""
+def clean_row(row) -> dict:
     profile = _parse_company_profile(_safe_str(row.get("Company Profile", "")))
-    skills  = _parse_skills(_safe_str(row.get("skills", "")))
+    skills   = _parse_skills(_safe_str(row.get("skills", "")))
     benefits = _parse_benefits(_safe_str(row.get("Benefits", "")))
-
     return {
-        "job_id":          _safe_str(row.get("Job Id", "")),
-        "title":           _safe_str(row.get("Job Title", "")),
-        "role":            _safe_str(row.get("Role", "")),
-        "company":         _safe_str(row.get("Company", "")),
-        "location":        _safe_str(row.get("location", "")),
-        "country":         _safe_str(row.get("Country", "")),
-        "work_type":       _safe_str(row.get("Work Type", "")),
-        "company_size":    _safe_str(row.get("Company Size", "")),
-        "experience":      _parse_experience(_safe_str(row.get("Experience", ""))),
-        "qualifications":  _safe_str(row.get("Qualifications", "")),
-        "salary":          _parse_salary(_safe_str(row.get("Salary Range", ""))),
-        "description":     _safe_str(row.get("Job Description", "")),
-        "responsibilities":_safe_str(row.get("Responsibilities", "")),
-        "skills":          skills,
-        "benefits":        benefits,
-        "sector":          profile.get("Sector", ""),
-        "industry":        profile.get("Industry", ""),
-        "posting_date":    _safe_str(row.get("Job Posting Date", "")),
-        "portal":          _safe_str(row.get("Job Portal", "")),
+        "job_id":           _safe_str(row.get("Job Id", "")),
+        "title":            _safe_str(row.get("Job Title", "")),
+        "role":             _safe_str(row.get("Role", "")),
+        "company":          _safe_str(row.get("Company", "")),
+        "location":         _safe_str(row.get("location", "")),
+        "country":          _safe_str(row.get("Country", "")),
+        "work_type":        _safe_str(row.get("Work Type", "")),
+        "company_size":     _safe_str(row.get("Company Size", "")),
+        "experience":       _parse_experience(_safe_str(row.get("Experience", ""))),
+        "qualifications":   _safe_str(row.get("Qualifications", "")),
+        "salary":           _parse_salary(_safe_str(row.get("Salary Range", ""))),
+        "description":      _safe_str(row.get("Job Description", "")),
+        "responsibilities": _safe_str(row.get("Responsibilities", "")),
+        "skills":           skills,
+        "benefits":         benefits,
+        "sector":           profile.get("Sector", ""),
+        "industry":         profile.get("Industry", ""),
+        "posting_date":     _safe_str(row.get("Job Posting Date", "")),
+        "portal":           _safe_str(row.get("Job Portal", "")),
     }
 
-
 def job_to_text(job: dict) -> str:
-    """Produce a dense text representation for embedding."""
     parts = [
         f"Title: {job['title']}",
         f"Role: {job['role']}",
@@ -191,15 +416,10 @@ def job_to_text(job: dict) -> str:
     ]
     return "\n".join(p for p in parts if not p.endswith(": "))
 
-
-# ──────────────────────────────────────────────────────────
-# Pinecone helpers
-# ──────────────────────────────────────────────────────────
-def get_or_create_index() -> object:
+def get_or_create_index():
     client = get_pinecone()
     existing = [idx.name for idx in client.list_indexes()]
     if PINECONE_INDEX not in existing:
-        log.info("Creating Pinecone index '%s'...", PINECONE_INDEX)
         client.create_index(
             name=PINECONE_INDEX,
             dimension=1536,
@@ -208,245 +428,375 @@ def get_or_create_index() -> object:
         )
     return client.Index(PINECONE_INDEX)
 
-
 def embed_texts(texts: list[str]) -> list[list[float]]:
     resp = get_openai().embeddings.create(model=EMBED_MODEL, input=texts)
     return [r.embedding for r in resp.data]
 
-
 def index_dataset(force: bool = False) -> int:
-    """Load CSV and upsert all jobs into Pinecone. Returns number of records indexed."""
     index = get_or_create_index()
-
-    # Check if already populated
     if not force:
         stats = index.describe_index_stats()
         if stats.total_vector_count > 0:
             log.info("Index already has %d vectors; skipping re-index.", stats.total_vector_count)
             return stats.total_vector_count
-
     log.info("Loading dataset from %s ...", CSV_PATH)
     df = pd.read_csv(CSV_PATH)
     log.info("Loaded %d rows.", len(df))
-
     jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
+    EMBED_BATCH = 96
+    UPSERT_BATCH = 100
+    batches = [jobs[i: i + EMBED_BATCH] for i in range(0, len(jobs), EMBED_BATCH)]
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    all_vectors = []
 
-    BATCH = 96  # embed up to 96 texts per API call
-    total = 0
-    for start in range(0, len(jobs), BATCH):
-        batch = jobs[start: start + BATCH]
+    def embed_batch(batch_and_offset):
+        batch, offset = batch_and_offset
         texts = [job_to_text(j) for j in batch]
         embeddings = embed_texts(texts)
-
         vectors = []
-        for job, emb in zip(batch, embeddings):
-            vid = f"job_{job['job_id']}_{start + len(vectors)}"
-            # Store key metadata for retrieval (Pinecone metadata values must be scalar/list)
+        for idx2, (job, emb) in enumerate(zip(batch, embeddings)):
+            vid = f"job_{job['job_id']}_{offset + idx2}"
             meta = {
-                "title":        job["title"],
-                "role":         job["role"],
-                "company":      job["company"],
-                "location":     job["location"],
-                "country":      job["country"],
-                "work_type":    job["work_type"],
-                "salary":       job["salary"],
-                "experience":   job["experience"],
-                "qualifications": job["qualifications"],
-                "skills":       job["skills"][:20],
-                "benefits":     job["benefits"][:10],
-                "description":  job["description"][:500],
-                "responsibilities": job["responsibilities"][:300],
-                "sector":       job["sector"],
-                "industry":     job["industry"],
-                "company_size": job["company_size"],
+                "title": job["title"], "role": job["role"], "company": job["company"],
+                "location": job["location"], "country": job["country"], "work_type": job["work_type"],
+                "salary": job["salary"], "salary_min": _extract_salary_min(job["salary"]),
+                "experience": job["experience"], "qualifications": job["qualifications"],
+                "skills": job["skills"][:20], "benefits": job["benefits"][:10],
+                "description": job["description"][:500], "responsibilities": job["responsibilities"][:300],
+                "sector": job["sector"], "industry": job["industry"], "company_size": job["company_size"],
             }
             vectors.append({"id": vid, "values": emb, "metadata": meta})
+        return vectors
 
-        index.upsert(vectors=vectors)
-        total += len(vectors)
-        log.info("Upserted %d / %d vectors...", total, len(jobs))
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(embed_batch, (batch, i * EMBED_BATCH)): i for i, batch in enumerate(batches)}
+        completed = 0
+        for future in as_completed(futures):
+            all_vectors.extend(future.result())
+            completed += 1
+            log.info("Embedded %d / %d batches...", completed, len(batches))
 
+    total = 0
+    for i in range(0, len(all_vectors), UPSERT_BATCH):
+        chunk = all_vectors[i: i + UPSERT_BATCH]
+        index.upsert(vectors=chunk)
+        total += len(chunk)
     log.info("Indexing complete. Total vectors: %d", total)
     return total
 
+def _extract_salary_min(salary_str: str) -> float:
+    m = re.search(r"\$([\d,]+)", salary_str)
+    if m:
+        return float(m.group(1).replace(",", ""))
+    return 0.0
+
+def _parse_salary_min_from_query(query: str) -> float:
+    m = re.search(r"\$\s*([\d,]+)\s*[Kk]", query)
+    if m:
+        return float(m.group(1).replace(",", "")) * 1000
+    m = re.search(r"\$\s*([\d,]+)", query)
+    if m:
+        val = float(m.group(1).replace(",", ""))
+        return val * 1000 if val < 1000 else val
+    m = re.search(r"\b(\d{2,3})[Kk]\b", query)
+    if m:
+        return float(m.group(1)) * 1000
+    return 0.0
 
 def search_jobs(query: str, top_k: int = TOP_K) -> list[dict]:
-    """Embed query and return top_k matching job metadata dicts."""
     index = get_or_create_index()
     [query_emb] = embed_texts([query])
-    results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
-    return [
-        {"score": round(m.score, 4), **m.metadata}
-        for m in results.matches
-    ]
+    salary_min = _parse_salary_min_from_query(query)
+    pinecone_filter = None
+    if salary_min > 0:
+        pinecone_filter = {"salary_min": {"$gte": salary_min}}
+    results = index.query(vector=query_emb, top_k=top_k, include_metadata=True, filter=pinecone_filter)
+    return [{"score": round(m.score, 4), **m.metadata} for m in results.matches]
 
+def search_jobs_cached(query: str, top_k: int = TOP_K) -> list[dict]:
+    key = hashlib.md5(f"{query}{top_k}".encode()).hexdigest()
+    if key in _search_cache:
+        return _search_cache[key]
+    result = search_jobs(query, top_k)
+    _search_cache[key] = result
+    return result
 
-# ──────────────────────────────────────────────────────────
-# LLM prompt & response
-# ──────────────────────────────────────────────────────────
-SYSTEM_PROMPT = """You are JobMatch AI, an expert career advisor and job matching assistant.
+# ─── LLM Prompt & Response ────────────────────────────
+SYSTEM_PROMPT = """You are JobMatch AI, a precise and expert career advisor.
 
-Given a user's profile and a list of candidate job postings (with similarity scores), your task is to:
-1. Rank the top {top_n} best-fit jobs
-2. Explain each match clearly
-3. Provide actionable next steps
+You will receive a user's job-seeking profile and a list of candidate job postings retrieved via semantic search. Your job is to act as a senior recruiter: critically evaluate each candidate posting against the user's profile and select the best {top_n} matches.
 
-Output STRICT Markdown using the following structure — do NOT deviate:
+SCORING CRITERIA (be strict and realistic):
+- 9-10: Near-perfect fit — role, skills, experience, location, and salary all align closely
+- 7-8: Strong fit — most key criteria match with minor gaps
+- 5-6: Moderate fit — role aligns but notable gaps in skills or experience
+- 3-4: Weak fit — only surface-level match
+- Do NOT inflate scores. A score of 9+ should be rare and well-justified.
+
+OUTPUT FORMAT — follow this EXACTLY, no deviations:
 
 # Your Job Match Results
 
 ## Summary
-- Jobs Analyzed: <total candidate count>
+- Jobs Analyzed: <total count from input>
 - Top Matches: {top_n}
-- Best Match Score: <score>/10
+- Best Match Score: <highest score>/10
 
 ## Top Job Matches
 
-### <Job Title> @ <Company>
-- **Match Score: <N>/10 | Location: <loc> | Salary: <salary>**
+### <Job Title> @ <Company Name>
+- **Match Score: <N>/10 | Location: <City, Country> | Salary: <range>**
 
 **Why It Matches:**
-- <reason 1>
-- <reason 2>
-- <reason 3>
+- <Specific skill or experience from user profile that maps to this job>
+- <Another concrete alignment — mention actual skill/role names>
+- <Third reason — can include work type, sector, or company size fit>
 
 **Gaps:**
-- <gap or "None identified">
+- <Specific missing skill, qualification, or experience — be honest>
 
-**Experience Alignment:** <one sentence>
+**Experience Alignment:** <One sentence comparing user's years/level to the job's requirement>
 
 **Recommended Next Steps:**
-1. <step 1>
-2. <step 2>
-3. <step 3>
+1. <Concrete action specific to THIS job>
+2. <Another specific action>
+3. <Third action>
 
 ---
 
-(repeat ### block for each of the top {top_n} jobs)
+### <next job title> @ <company>
+... (repeat for all {top_n} jobs)
 
 ## Recommended Next Steps
-1. <global step 1>
-2. <global step 2>
-3. <global step 3>
+1. <Broad career advice>
+2. <Skill to develop>
+3. <Networking tip>
 
-Rules:
-- Match scores should be 1–10 based on how well the job fits the user's profile
-- Be concise and specific — no filler text
+STRICT RULES:
+- Use ONLY the job data provided
+- Be specific: mention actual skill names, job titles, and requirements from the data
 - Do NOT use emojis
-- Do NOT output JSON, only the Markdown format above
+- Do NOT wrap output in code fences
+- Do NOT add any text before "# Your Job Match Results"
 """.strip()
-
 
 def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
     candidate_text = ""
     for i, c in enumerate(candidates, 1):
-        skills = ", ".join(c.get("skills", [])[:10])
+        skills = ", ".join(c.get("skills", [])[:12])
         benefits = ", ".join(c.get("benefits", [])[:5])
-        candidate_text += f"""
-[Candidate {i}] (vector similarity: {c['score']})
-Title: {c.get('title', '')} | Role: {c.get('role', '')}
-Company: {c.get('company', '')} ({c.get('sector', '')} / {c.get('industry', '')})
-Location: {c.get('location', '')}, {c.get('country', '')} | Work Type: {c.get('work_type', '')}
-Salary: {c.get('salary', '')} | Experience: {c.get('experience', '')} | Qualifications: {c.get('qualifications', '')}
-Company Size: {c.get('company_size', '')}
-Skills: {skills}
-Benefits: {benefits}
-Description: {c.get('description', '')[:300]}
-Responsibilities: {c.get('responsibilities', '')[:200]}
-""".strip() + "\n---\n"
+        candidate_text += (
+            f"[Candidate {i}] (semantic similarity: {c['score']})\n"
+            f"Title: {c.get('title', '')} | Role: {c.get('role', '')}\n"
+            f"Company: {c.get('company', '')} | Sector: {c.get('sector', '')} | Industry: {c.get('industry', '')}\n"
+            f"Location: {c.get('location', '')}, {c.get('country', '')} | Work Type: {c.get('work_type', '')}\n"
+            f"Salary: {c.get('salary', '')} | Experience Required: {c.get('experience', '')} | Qualifications: {c.get('qualifications', '')}\n"
+            f"Company Size: {c.get('company_size', '')}\n"
+            f"Required Skills: {skills}\n"
+            f"Benefits: {benefits}\n"
+            f"Description: {c.get('description', '')[:350]}\n"
+            f"Responsibilities: {c.get('responsibilities', '')[:200]}\n"
+            "---\n"
+        )
+    return (
+        f"USER PROFILE & JOB REQUEST:\n{user_query}\n\n"
+        f"CANDIDATE JOB POSTINGS ({len(candidates)} retrieved by semantic search):\n"
+        f"{candidate_text}\n"
+        f"Select the top {TOP_N_RESULTS} best matches for this user and respond in the required Markdown format."
+    )
 
-    return f"""USER PROFILE & REQUEST:
-{user_query}
-
-CANDIDATE JOB POSTINGS ({len(candidates)} retrieved):
-{candidate_text}
-
-Please select the top {TOP_N_RESULTS} matches and respond using the required Markdown format."""
-
-
-def generate_response(user_query: str, candidates: list[dict]) -> str:
+def generate_response(user_query: str, candidates: list[dict], history: list = None) -> str:
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
     user_msg = build_llm_prompt(user_query, candidates)
-
-    log.info("Calling %s with %d candidates...", CHAT_MODEL, len(candidates))
+    messages = [{"role": "system", "content": system}]
+    if history:
+        messages.extend(history[-20:])
+    messages.append({"role": "user", "content": user_msg})
     response = get_openai().chat.completions.create(
         model=CHAT_MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user",   "content": user_msg},
-        ],
+        messages=messages,
         temperature=0.3,
         max_tokens=3000,
     )
     return response.choices[0].message.content.strip()
 
-
-# ──────────────────────────────────────────────────────────
-# FastAPI app
-# ──────────────────────────────────────────────────────────
-app = FastAPI(title="JobMatch AI Backend", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-class WebhookRequest(BaseModel):
-    chatInput: str
-    sessionId: Optional[str] = None
-
-
-class WebhookResponse(BaseModel):
-    output: str
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Auto-index on startup if Pinecone index is empty."""
-    if not OPENAI_API_KEY:
-        log.warning("OPENAI_API_KEY not set — skipping auto-index.")
-        return
-    if not PINECONE_API_KEY:
-        log.warning("PINECONE_API_KEY not set — skipping auto-index.")
-        return
-    try:
-        index_dataset(force=False)
-    except Exception as e:
-        log.error("Auto-index failed: %s", e)
-
+# ─── Endpoints ────────────────────────────────────────
 
 @app.get("/health")
-def health():
-    return {"status": "ok"}
+async def health():
+    return {"status": "ok", "version": "2.0.0"}
 
 
-@app.post("/webhook", response_model=WebhookResponse)
-async def webhook(req: WebhookRequest):
-    if not req.chatInput.strip():
-        raise HTTPException(status_code=400, detail="chatInput is required")
+@app.post("/webhook", response_model=WebhookResponse, dependencies=[Depends(verify_api_key)])
+@limiter.limit("10/minute")
+async def webhook(request: Request, req: WebhookRequest):
+    request_id = str(uuid.uuid4())[:8]
+    log.info("[%s] /webhook called", request_id)
 
-    try:
-        candidates = search_jobs(req.chatInput, top_k=TOP_K)
-        if not candidates:
-            return WebhookResponse(output="No matching jobs found in the database. Please try different search terms.")
+    if req.profile:
+        query = build_query_from_profile(req.profile)
+    elif req.chatInput and req.chatInput.strip():
+        query = req.chatInput.strip()
+    else:
+        raise HTTPException(status_code=400, detail="Either profile or chatInput is required")
 
-        output = generate_response(req.chatInput, candidates)
-        return WebhookResponse(output=output)
-
-    except Exception as e:
-        log.exception("Error processing request")
-        raise HTTPException(status_code=500, detail=str(e))
+    session_id = req.sessionId or str(uuid.uuid4())
+    history = get_session_history(session_id)
+    candidates = search_jobs_cached(query, top_k=TOP_K)
+    if not candidates:
+        return WebhookResponse(output="No matching jobs found. Please try different search terms.")
+    output = generate_response(query, candidates, history)
+    save_session_turn(session_id, query, output)
+    log.info("[%s] /webhook done, session=%s", request_id, session_id)
+    return WebhookResponse(output=output)
 
 
 @app.post("/index")
-async def reindex(force: bool = False):
-    """Trigger re-indexing of the CSV dataset."""
+async def index_endpoint(force: bool = False, _: None = Depends(verify_api_key)):
     try:
-        count = index_dataset(force=force)
-        return {"status": "ok", "vectors_indexed": count}
+        total = index_dataset(force=force)
+        return {"status": "ok", "total_vectors": total}
     except Exception as e:
-        log.exception("Indexing error")
+        log.exception("Indexing failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/parse-resume", dependencies=[Depends(verify_api_key)])
+async def parse_resume(file: UploadFile = File(...)):
+    if not file.filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    if not _PDFPLUMBER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="pdfplumber is not installed on this server")
+    contents = await file.read()
+    text = ""
+    try:
+        with pdfplumber.open(io.BytesIO(contents)) as pdf:
+            for page in pdf.pages:
+                text += (page.extract_text() or "") + "\n"
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not parse PDF: {e}")
+
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="No text could be extracted from PDF")
+
+    prompt = f"""Extract structured profile information from this resume text. Return ONLY valid JSON with these exact fields:
+{{
+  "name": "full name or empty string",
+  "skills": ["skill1", "skill2"],
+  "experience_years": 0,
+  "education": "highest degree or empty string",
+  "recent_role": "most recent job title or empty string",
+  "industries": ["industry1"]
+}}
+
+Resume text:
+{text[:3000]}"""
+
+    response = get_openai().chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0,
+        max_tokens=500,
+        response_format={"type": "json_object"},
+    )
+
+    try:
+        parsed = json.loads(response.choices[0].message.content)
+    except Exception:
+        parsed = {}
+
+    return parsed
+
+
+@app.post("/cover-letter", dependencies=[Depends(verify_api_key)])
+async def generate_cover_letter(req: CoverLetterRequest):
+    skills_str = ", ".join(req.profile.skills[:10]) if req.profile.skills else "various technical skills"
+    prompt = f"""Write a compelling 3-paragraph cover letter for {req.profile.name or 'the applicant'} applying to the {req.jobTitle} position at {req.company}.
+
+Applicant profile:
+- Experience: {req.profile.experience} years
+- Skills: {skills_str}
+- Education: {req.profile.education}
+- Desired role: {req.profile.desiredRole}
+
+Job description context: {req.jobDescription[:500] if req.jobDescription else 'Not provided'}
+
+Tone: {req.tone}
+
+Write exactly 3 paragraphs: (1) opening hook with role and key qualification, (2) specific skills and experiences that match the role, (3) closing with enthusiasm and call to action. Do NOT include subject line, date, address blocks, or "Dear Hiring Manager" header - start directly with the first paragraph."""
+
+    response = get_openai().chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=600,
+    )
+    return {"cover_letter": response.choices[0].message.content.strip()}
+
+
+@app.post("/bookmark", dependencies=[Depends(verify_api_key)])
+async def save_bookmark(req: BookmarkRequest):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO bookmarks (session_id, job_title, company, location, salary, match_score, job_data, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (req.session_id, req.job_title, req.company, req.location, req.salary,
+             req.match_score, json.dumps(req.job_data), datetime.utcnow().isoformat())
+        )
+        await db.commit()
+    return {"status": "saved"}
+
+
+@app.get("/bookmarks/{session_id}", dependencies=[Depends(verify_api_key)])
+async def get_bookmarks(session_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM bookmarks WHERE session_id = ? ORDER BY created_at DESC",
+            (session_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["job_data"] = json.loads(item.get("job_data", "{}") or "{}")
+        result.append(item)
+    return {"bookmarks": result}
+
+
+@app.post("/feedback", dependencies=[Depends(verify_api_key)])
+async def submit_feedback(req: FeedbackRequest):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """INSERT INTO feedback (session_id, job_title, company, rating, comment, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (req.session_id, req.job_title, req.company, req.rating, req.comment, datetime.utcnow().isoformat())
+        )
+        await db.commit()
+    return {"status": "ok"}
+
+
+@app.post("/send-results", dependencies=[Depends(verify_api_key)])
+async def send_results(req: SendResultsRequest):
+    if not RESEND_API_KEY:
+        raise HTTPException(status_code=503, detail="Email service not configured")
+    try:
+        resend_lib.api_key = RESEND_API_KEY
+        # Convert simple markdown to HTML
+        html_body = (
+            req.results_markdown
+            .replace("\n", "<br>")
+            .replace("**", "<strong>")
+            .replace("# ", "<h2>")
+            .replace("## ", "<h3>")
+        )
+        resend_lib.Emails.send({
+            "from": FROM_EMAIL,
+            "to": req.email,
+            "subject": f"Your JobMatch AI Results \u2014 {req.name}",
+            "html": f"<p>Hi {req.name},</p><p>Here are your job matches:</p><br>{html_body}",
+        })
+        return {"status": "sent"}
+    except Exception as e:
+        log.exception("Email send failed")
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")

@@ -2,15 +2,19 @@
    JobMatch AI — Dashboard Logic
    ══════════════════════════════════════════════════════ */
 
-// ─── CONFIGURATION ───────────────────────────────────
-// Python backend (FastAPI) — run: uvicorn backend:app --reload
-const N8N_WEBHOOK_URL = 'http://localhost:8000/webhook';
-// ─────────────────────────────────────────────────────
+// CONFIG is loaded from config.js
+
+// ─── SESSION ID ───────────────────────────────────────
+let currentSessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+// ─── BOOKMARKS (localStorage) ─────────────────────────
+const bookmarkedJobs = new Set(JSON.parse(localStorage.getItem('jobmatch_bookmarks') || '[]'));
 
 // ─── DOM ELEMENTS ────────────────────────────────────
 const form = document.getElementById('profile-form');
 const submitBtn = document.getElementById('submitBtn');
 const clearBtn = document.getElementById('clearBtn');
+const emailResultsBtn = document.getElementById('emailResultsBtn');
 
 const emptyState = document.getElementById('empty-state');
 const loadingState = document.getElementById('loading-state');
@@ -22,6 +26,16 @@ const resultsContent = document.getElementById('results-content');
 const experienceSlider = document.getElementById('experience');
 const experienceValue = document.getElementById('experienceValue');
 
+// ─── DARK MODE TOGGLE ────────────────────────────────
+const darkModeToggle = document.getElementById('darkModeToggle');
+if (localStorage.getItem('jobmatch_dark') === '1') {
+  document.documentElement.setAttribute('data-theme', 'dark');
+}
+darkModeToggle?.addEventListener('click', () => {
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
+  localStorage.setItem('jobmatch_dark', isDark ? '0' : '1');
+});
 
 // ─── INITIALIZE DATALISTS ───────────────────────────
 // Populate job titles datalist
@@ -145,54 +159,64 @@ experienceSlider.addEventListener('input', () => {
 });
 
 
-// ─── FORM SUBMISSION ────────────────────────────────
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-
-  // Collect all form values
-  const profile = {
-    name: document.getElementById('fullName').value.trim(),
-    email: document.getElementById('email').value.trim(),
-    desiredRole: document.getElementById('desiredRole').value.trim(),
-    experience: experienceSlider.value,
-    skills: document.getElementById('skills').value.trim(),
-    education: document.getElementById('education').value,
-    industry: document.getElementById('industry').value.trim(),
-    location: document.getElementById('location').value.trim(),
-    workType: document.getElementById('workType').value,
-    salaryMin: document.getElementById('salaryMin').value,
-    companySize: document.getElementById('companySize').value,
-    benefits: Array.from(document.querySelectorAll('input[name="benefits"]:checked')).map(cb => cb.value),
-    workAuth: document.getElementById('workAuth').value,
-    additional: document.getElementById('additional').value.trim(),
-  };
-
-  // Build natural language prompt from profile
-  const chatInput = buildPrompt(profile);
-
-  // Switch UI states
-  showState('loading');
-  submitBtn.disabled = true;
-
-  try {
-    const response = await sendToN8N(chatInput);
-    displayResults(response);
-  } catch (err) {
-    showError(err.message || 'An unexpected error occurred.');
-  } finally {
-    submitBtn.disabled = false;
+// ─── FETCH WITH RETRY ───────────────────────────────
+async function fetchWithRetry(url, options, retries = 2) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await fetch(url, options);
+    } catch (err) {
+      if (attempt === retries) throw err;
+      await new Promise(r => setTimeout(r, 1500 * Math.pow(2, attempt)));
+    }
   }
-});
+}
 
 
-// ─── CLEAR RESULTS ──────────────────────────────────
-clearBtn.addEventListener('click', () => {
-  showState('empty');
-  resultsContent.innerHTML = '';
-});
+// ─── SEND TO BACKEND ────────────────────────────────
+async function sendToBackend(profile) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 60000);
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+
+  let res;
+  try {
+    res = await fetchWithRetry(CONFIG.API_BASE_URL + '/webhook', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ profile, sessionId: currentSessionId }),
+      signal: controller.signal,
+    });
+  } catch (networkErr) {
+    if (networkErr.name === 'AbortError') {
+      throw new Error('Request timed out — please try again');
+    }
+    throw new Error('Cannot reach the backend. Make sure you ran: uvicorn backend:app --port 8000');
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    let detail = '';
+    try { detail = JSON.parse(text).detail || text; } catch { detail = text; }
+    if (res.status === 401) throw new Error('API key invalid or missing');
+    if (res.status === 429) throw new Error('Too many requests — please wait a moment and try again');
+    if (res.status === 500 && detail.includes('API_KEY')) throw new Error('API key missing or invalid. Check your .env file.');
+    throw new Error(`Backend error (${res.status}): ${detail}`);
+  }
+
+  const data = await res.json();
+  if (typeof data === 'string') return data;
+  if (data.output) return data.output;
+  if (data.text) return data.text;
+  if (data.response) return data.response;
+  return JSON.stringify(data, null, 2);
+}
 
 
-// ─── BUILD PROMPT ───────────────────────────────────
+// ─── BUILD PROMPT (legacy, kept for compat) ──────────
 function buildPrompt(p) {
   let prompt = `I'm looking for job recommendations. Here is my profile:\n\n`;
 
@@ -230,41 +254,274 @@ function buildPrompt(p) {
 }
 
 
-// ─── SEND TO N8N ────────────────────────────────────
-async function sendToN8N(chatInput) {
-  if (!N8N_WEBHOOK_URL || N8N_WEBHOOK_URL === 'YOUR_N8N_WEBHOOK_URL_HERE') {
-    throw new Error(
-      'Webhook URL not configured. Please open app.js and set your n8n Chat Trigger webhook URL in the N8N_WEBHOOK_URL variable at the top of the file.'
-    );
-  }
+// ─── FORM SUBMISSION ────────────────────────────────
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
 
-  const res = await fetch(N8N_WEBHOOK_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      chatInput: chatInput,
-      sessionId: `session_${Date.now()}`,
-    }),
+  // Collect all form values
+  const profile = {
+    name: document.getElementById('fullName').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    desiredRole: document.getElementById('desiredRole').value.trim(),
+    experience: parseInt(experienceSlider.value, 10),
+    skills: skillTags.slice(),
+    education: document.getElementById('education').value,
+    industry: document.getElementById('industry').value.trim(),
+    location: document.getElementById('location').value.trim(),
+    workType: document.getElementById('workType').value,
+    salaryMin: document.getElementById('salaryMin').value ? parseInt(document.getElementById('salaryMin').value, 10) : null,
+    companySize: document.getElementById('companySize').value,
+    benefits: Array.from(document.querySelectorAll('input[name="benefits"]:checked')).map(cb => cb.value),
+    workAuth: document.getElementById('workAuth').value,
+    additional: document.getElementById('additional').value.trim(),
+  };
+
+  // Switch UI states
+  showState('loading');
+  submitBtn.disabled = true;
+  if (emailResultsBtn) emailResultsBtn.style.display = 'none';
+
+  try {
+    const response = await sendToBackend(profile);
+    displayResults(response);
+  } catch (err) {
+    showError(err.message || 'An unexpected error occurred.');
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+
+// ─── CLEAR RESULTS ──────────────────────────────────
+clearBtn.addEventListener('click', () => {
+  showState('empty');
+  resultsContent.innerHTML = '';
+  if (emailResultsBtn) emailResultsBtn.style.display = 'none';
+});
+
+
+// ─── EMAIL MY RESULTS ────────────────────────────────
+if (emailResultsBtn) {
+  emailResultsBtn.addEventListener('click', async () => {
+    const emailVal = document.getElementById('email').value.trim();
+    const nameVal = document.getElementById('fullName').value.trim();
+    if (!emailVal) {
+      alert('Please enter your email address in the form before sending results.');
+      return;
+    }
+    const resultsMarkdown = resultsContent.innerText || resultsContent.textContent || '';
+    const headers = { 'Content-Type': 'application/json' };
+    if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+    try {
+      emailResultsBtn.disabled = true;
+      emailResultsBtn.textContent = 'Sending...';
+      const res = await fetch(CONFIG.API_BASE_URL + '/send-results', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ email: emailVal, name: nameVal || 'there', results_markdown: resultsMarkdown }),
+      });
+      if (res.ok) {
+        emailResultsBtn.textContent = 'Sent!';
+        setTimeout(() => { emailResultsBtn.textContent = 'Email My Results'; emailResultsBtn.disabled = false; }, 3000);
+      } else {
+        const d = await res.json().catch(() => ({}));
+        alert('Failed to send email: ' + (d.detail || res.status));
+        emailResultsBtn.textContent = 'Email My Results';
+        emailResultsBtn.disabled = false;
+      }
+    } catch (err) {
+      alert('Could not reach email service: ' + err.message);
+      emailResultsBtn.textContent = 'Email My Results';
+      emailResultsBtn.disabled = false;
+    }
   });
+}
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`Server responded with ${res.status}. ${text}`);
+
+// ─── RESUME UPLOAD ───────────────────────────────────
+const resumeDropzone = document.getElementById('resume-dropzone');
+const resumeFileInput = document.getElementById('resumeFile');
+const resumeStatus = document.getElementById('resumeStatus');
+
+async function handleResumeUpload(file) {
+  if (!file || !file.name.endsWith('.pdf')) {
+    resumeStatus.textContent = 'Only PDF files accepted.';
+    resumeStatus.className = 'resume-status error';
+    return;
   }
+  resumeStatus.textContent = 'Parsing resume...';
+  resumeStatus.className = 'resume-status loading';
 
-  const data = await res.json();
+  const formData = new FormData();
+  formData.append('file', file);
+  const headers = {};
+  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
 
-  // n8n chat trigger returns output in different shapes. Handle common ones:
-  if (typeof data === 'string') return data;
-  if (data.output) return data.output;
-  if (data.text) return data.text;
-  if (data.response) return data.response;
-  if (Array.isArray(data) && data.length > 0) {
-    const first = data[0];
-    return first.output || first.text || first.response || JSON.stringify(first);
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/parse-resume', {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Server error ${res.status}`);
+    }
+    const data = await res.json();
+
+    // Auto-populate form fields
+    if (data.name) document.getElementById('fullName').value = data.name;
+    if (data.recent_role) document.getElementById('desiredRole').value = data.recent_role;
+    if (data.experience_years) {
+      const expVal = Math.min(Math.max(parseInt(data.experience_years, 10) || 0, 0), 30);
+      experienceSlider.value = expVal;
+      experienceValue.textContent = `${expVal} yr${expVal !== 1 ? 's' : ''}`;
+    }
+    if (data.education) document.getElementById('education').value = data.education;
+    if (data.industries && data.industries.length > 0) {
+      document.getElementById('industry').value = data.industries[0];
+    }
+    if (data.skills && data.skills.length > 0) {
+      // Clear existing tags
+      skillsTagContainer.querySelectorAll('.skill-tag').forEach(t => t.remove());
+      skillTags.length = 0;
+      data.skills.slice(0, 12).forEach(skill => addSkillTag(skill));
+    }
+
+    resumeStatus.textContent = 'Resume parsed! Fields auto-filled.';
+    resumeStatus.className = 'resume-status success';
+  } catch (err) {
+    resumeStatus.textContent = 'Parse failed: ' + err.message;
+    resumeStatus.className = 'resume-status error';
   }
+}
 
-  return JSON.stringify(data, null, 2);
+if (resumeFileInput) {
+  resumeFileInput.addEventListener('change', (e) => {
+    if (e.target.files && e.target.files[0]) {
+      handleResumeUpload(e.target.files[0]);
+    }
+  });
+}
+
+if (resumeDropzone) {
+  resumeDropzone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    resumeDropzone.classList.add('drag-over');
+  });
+  resumeDropzone.addEventListener('dragleave', () => {
+    resumeDropzone.classList.remove('drag-over');
+  });
+  resumeDropzone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    resumeDropzone.classList.remove('drag-over');
+    const file = e.dataTransfer.files && e.dataTransfer.files[0];
+    if (file) handleResumeUpload(file);
+  });
+  resumeDropzone.addEventListener('click', (e) => {
+    // Don't trigger if clicking the label (it triggers the file input itself)
+    if (e.target.tagName === 'LABEL' || e.target.tagName === 'INPUT') return;
+    resumeFileInput.click();
+  });
+}
+
+
+// ─── BOOKMARK FUNCTIONALITY ──────────────────────────
+async function saveBookmark(jobTitle, company, location, salary, matchScore) {
+  const bookmarkKey = jobTitle + '|' + company;
+  const headers = { 'Content-Type': 'application/json' };
+  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+  try {
+    await fetch(CONFIG.API_BASE_URL + '/bookmark', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        session_id: currentSessionId,
+        job_title: jobTitle,
+        company: company,
+        location: location,
+        salary: salary,
+        match_score: matchScore,
+        job_data: { title: jobTitle, company, location, salary },
+      }),
+    });
+    bookmarkedJobs.add(bookmarkKey);
+    localStorage.setItem('jobmatch_bookmarks', JSON.stringify([...bookmarkedJobs]));
+  } catch (err) {
+    console.warn('Bookmark save failed:', err.message);
+  }
+}
+
+
+// ─── COVER LETTER MODAL ──────────────────────────────
+const coverLetterModal = document.getElementById('coverLetterModal');
+const coverLetterContent = document.getElementById('coverLetterContent');
+const closeCoverLetter = document.getElementById('closeCoverLetter');
+const closeCoverLetterBtn = document.getElementById('closeCoverLetterBtn');
+const copyCoverLetter = document.getElementById('copyCoverLetter');
+
+function openCoverLetterModal(text) {
+  if (coverLetterContent) coverLetterContent.textContent = text;
+  if (coverLetterModal) coverLetterModal.classList.remove('hidden');
+}
+
+function closeCoverLetterModal() {
+  if (coverLetterModal) coverLetterModal.classList.add('hidden');
+}
+
+closeCoverLetter?.addEventListener('click', closeCoverLetterModal);
+closeCoverLetterBtn?.addEventListener('click', closeCoverLetterModal);
+coverLetterModal?.addEventListener('click', (e) => {
+  if (e.target === coverLetterModal) closeCoverLetterModal();
+});
+
+copyCoverLetter?.addEventListener('click', () => {
+  const text = coverLetterContent?.textContent || '';
+  navigator.clipboard.writeText(text).then(() => {
+    copyCoverLetter.textContent = 'Copied!';
+    setTimeout(() => { copyCoverLetter.textContent = 'Copy to Clipboard'; }, 2000);
+  });
+});
+
+async function generateCoverLetter(jobTitle, company, jobDescription) {
+  const profile = {
+    name: document.getElementById('fullName').value.trim(),
+    email: document.getElementById('email').value.trim(),
+    desiredRole: document.getElementById('desiredRole').value.trim(),
+    experience: parseInt(experienceSlider.value, 10),
+    skills: skillTags.slice(),
+    education: document.getElementById('education').value,
+    industry: document.getElementById('industry').value.trim(),
+    location: document.getElementById('location').value.trim(),
+    workType: document.getElementById('workType').value,
+    salaryMin: document.getElementById('salaryMin').value ? parseInt(document.getElementById('salaryMin').value, 10) : null,
+    companySize: document.getElementById('companySize').value,
+    benefits: Array.from(document.querySelectorAll('input[name="benefits"]:checked')).map(cb => cb.value),
+    workAuth: document.getElementById('workAuth').value,
+    additional: document.getElementById('additional').value.trim(),
+  };
+
+  if (coverLetterContent) coverLetterContent.textContent = 'Generating cover letter...';
+  if (coverLetterModal) coverLetterModal.classList.remove('hidden');
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
+
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/cover-letter', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ profile, jobTitle, company, jobDescription: jobDescription || '', tone: 'professional' }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Server error ${res.status}`);
+    }
+    const data = await res.json();
+    openCoverLetterModal(data.cover_letter || 'No cover letter generated.');
+  } catch (err) {
+    if (coverLetterContent) coverLetterContent.textContent = 'Error: ' + err.message;
+  }
 }
 
 
@@ -304,6 +561,7 @@ function displayResults(markdown) {
     resultsContent.innerHTML = renderFallbackMarkdown(cleaned);
   }
   showState('results');
+  if (emailResultsBtn) emailResultsBtn.style.display = '';
 }
 
 
@@ -432,6 +690,7 @@ function renderJobCard(job, rank) {
   const reasons = [], gaps = [], actions = [];
   let experience = '';
   let currentList = null;
+  let jobDescription = '';
 
   for (const line of lines) {
     const raw = line.trim();
@@ -474,10 +733,16 @@ function renderJobCard(job, rank) {
       const afterColon = clean.substring(clean.indexOf(':') + 1).trim();
       if (afterColon) { actions.push(afterColon); continue; }
     }
+
+    // Capture description-like content for cover letter context
+    if (currentList === 'reasons' && clean.length > 20) {
+      jobDescription += clean + ' ';
+    }
   }
 
   const score = parseInt(matchScore) || 0;
   const scoreClass = score >= 8 ? 'score-high' : score >= 6 ? 'score-mid' : 'score-low';
+  const bookmarkKey = jobTitle + '|' + company;
 
   // Build plain text for copy-to-clipboard
   let copyText = `${jobTitle}`;
@@ -501,12 +766,40 @@ function renderJobCard(job, rank) {
   if (company) html += `<div class="job-company">${esc(company)}</div>`;
   html += '</div></div>';
   html += '<div class="job-header-right">';
+
+  // Score badge with progress bar
   if (matchScore) {
-    html += `<div class="score-badge ${scoreClass}"><span class="score-num">${matchScore}</span><span class="score-den">/10</span></div>`;
+    const scoreBarClass = score >= 8 ? 'score-high' : score >= 6 ? 'score-mid' : 'score-low';
+    const scoreWidth = Math.round((score / 10) * 100);
+    html += `<div class="score-bar-wrapper">
+      <div class="score-bar"><div class="score-bar-fill ${scoreBarClass}" style="width:${scoreWidth}%"></div></div>
+      <div class="score-badge ${scoreClass}"><span class="score-num">${matchScore}</span><span class="score-den">/10</span></div>
+    </div>`;
   }
+
+  // Cover letter button
+  html += `<button class="card-cover-letter-btn" title="Generate cover letter"
+    data-cl-title="${esc(jobTitle)}"
+    data-cl-company="${esc(company)}"
+    data-cl-desc="${esc(jobDescription.trim().slice(0, 300))}">
+    Cover Letter
+  </button>`;
+
+  // Bookmark button
+  html += `<button class="card-bookmark-btn ${bookmarkedJobs.has(bookmarkKey) ? 'bookmarked' : ''}" title="Bookmark this job"
+    data-bookmark-title="${esc(jobTitle)}"
+    data-bookmark-company="${esc(company)}"
+    data-bookmark-location="${esc(location)}"
+    data-bookmark-salary="${esc(salary)}"
+    data-bookmark-score="${score}">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="${bookmarkedJobs.has(bookmarkKey) ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+  </button>`;
+
+  // Copy button
   html += `<button class="card-copy-btn" title="Copy job details" data-copy-card>
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
   </button>`;
+
   html += `<svg class="card-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
   html += '</div></div>';
 
@@ -598,8 +891,10 @@ function wireCardInteractions() {
   // Collapsible cards
   document.querySelectorAll('[data-toggle-card]').forEach(header => {
     header.addEventListener('click', (e) => {
-      // Don't collapse if clicking the copy button
+      // Don't collapse if clicking the copy button, bookmark, or cover letter button
       if (e.target.closest('[data-copy-card]')) return;
+      if (e.target.closest('.card-bookmark-btn')) return;
+      if (e.target.closest('.card-cover-letter-btn')) return;
       const card = header.closest('.job-card');
       if (card) card.classList.toggle('collapsed');
     });
@@ -620,6 +915,39 @@ function wireCardInteractions() {
           btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
         }, 2000);
       });
+    });
+  });
+
+  // Bookmark buttons
+  document.querySelectorAll('.card-bookmark-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const title = btn.getAttribute('data-bookmark-title') || '';
+      const company = btn.getAttribute('data-bookmark-company') || '';
+      const location = btn.getAttribute('data-bookmark-location') || '';
+      const salary = btn.getAttribute('data-bookmark-salary') || '';
+      const score = parseFloat(btn.getAttribute('data-bookmark-score') || '0');
+      const bookmarkKey = title + '|' + company;
+
+      if (!bookmarkedJobs.has(bookmarkKey)) {
+        await saveBookmark(title, company, location, salary, score);
+        btn.classList.add('bookmarked');
+        const svgPath = btn.querySelector('path');
+        if (svgPath) {
+          btn.querySelector('svg').setAttribute('fill', 'currentColor');
+        }
+      }
+    });
+  });
+
+  // Cover letter buttons
+  document.querySelectorAll('.card-cover-letter-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const title = btn.getAttribute('data-cl-title') || '';
+      const company = btn.getAttribute('data-cl-company') || '';
+      const desc = btn.getAttribute('data-cl-desc') || '';
+      await generateCoverLetter(title, company, desc);
     });
   });
 }
@@ -661,7 +989,7 @@ function renderFallbackMarkdown(text) {
 function esc(str) { return escapeHtml(str); }
 function escapeHtml(str) {
   const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-  return str.replace(/[&<>"']/g, c => map[c]);
+  return String(str).replace(/[&<>"']/g, c => map[c]);
 }
 
 
@@ -683,5 +1011,3 @@ function showError(msg) {
   errorMessage.textContent = msg;
   showState('error');
 }
-
-
