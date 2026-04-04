@@ -1881,3 +1881,229 @@ input[type="range"]::-moz-range-thumb {
     opacity: 1 !important;
   }
 }
+/* Landing Experience */
+#marketing-shell {
+  min-height: 100vh;
+  color: var(--text-primary);
+  background:
+    radial-gradient(1200px 500px at -10% -20%, rgba(13, 109, 102, 0.18), transparent 50%),
+    radial-gradient(800px 500px at 110% 10%, rgba(154, 95, 8, 0.1), transparent 52%),
+    var(--bg-body);
+}
+
+.landing-header,
+.landing-main {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding-left: var(--space-xl);
+  padding-right: var(--space-xl);
+}
+
+.landing-header {
+  padding-top: 24px;
+  padding-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.landing-brand {
+  font-family: 'Manrope', sans-serif;
+  font-size: 1.28rem;
+  font-weight: 800;
+  letter-spacing: -0.4px;
+}
+
+.landing-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.landing-nav a {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.landing-main {
+  padding-top: var(--space-sm);
+  padding-bottom: var(--space-2xl);
+}
+
+.hero-section {
+  display: grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap: var(--space-lg);
+  margin-bottom: var(--space-xl);
+}
+
+.hero-copy,
+.hero-card,
+.how-card {
+  background: linear-gradient(170deg, rgba(255, 252, 247, 0.95), rgba(247, 242, 232, 0.88));
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+}
+
+.hero-copy {
+  padding: var(--space-xl);
+}
+
+.hero-kicker {
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
+.hero-copy h1 {
+  font-family: 'Manrope', sans-serif;
+  font-size: clamp(2rem, 4vw, 2.85rem);
+  line-height: 1.06;
+  margin-bottom: 12px;
+  letter-spacing: -1px;
+}
+
+.hero-copy p {
+  color: var(--text-secondary);
+  max-width: 52ch;
+}
+
+.hero-actions {
+  margin-top: var(--space-lg);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.landing-btn-primary,
+.landing-btn-secondary {
+  border-radius: var(--radius-md);
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 0.86rem;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.landing-btn-primary {
+  padding: 10px 14px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--text-inverse);
+  box-shadow: 0 6px 18px rgba(13, 109, 102, 0.24);
+}
+
+.landing-btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 10px 24px rgba(13, 109, 102, 0.3);
+  transform: translateY(-1px);
+}
+
+.landing-btn-secondary {
+  padding: 10px 14px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+}
+
+.landing-btn-secondary:hover {
+  background: var(--bg-section);
+  color: var(--text-primary);
+  border-color: var(--border-medium);
+}
+
+.hero-card {
+  padding: var(--space-lg);
+}
+
+.hero-card h3 {
+  font-family: 'Manrope', sans-serif;
+  margin-bottom: 10px;
+}
+
+.hero-card ul {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-secondary);
+}
+
+.how-section {
+  padding: var(--space-sm) 0 var(--space-xl);
+}
+
+.how-section h2 {
+  font-family: 'Manrope', sans-serif;
+  font-size: 1.7rem;
+  margin-bottom: 12px;
+}
+
+.how-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.how-card {
+  padding: var(--space-lg);
+}
+
+.how-card span {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: var(--accent);
+  color: var(--text-inverse);
+  margin-bottom: 10px;
+}
+
+.how-card h3 {
+  font-family: 'Manrope', sans-serif;
+  margin-bottom: 7px;
+}
+
+.how-card p {
+  color: var(--text-secondary);
+  font-size: 0.92rem;
+}
+
+[data-theme="dark"] #marketing-shell {
+  background:
+    radial-gradient(1200px 500px at -10% -20%, rgba(13, 109, 102, 0.2), transparent 50%),
+    radial-gradient(800px 500px at 110% 10%, rgba(154, 95, 8, 0.12), transparent 52%),
+    var(--bg-body);
+}
+
+[data-theme="dark"] .hero-copy,
+[data-theme="dark"] .hero-card,
+[data-theme="dark"] .how-card {
+  background: linear-gradient(170deg, rgba(26, 29, 39, 0.92), rgba(20, 23, 32, 0.9));
+}
+
+@media (max-width: 900px) {
+  .hero-section {
+    grid-template-columns: 1fr;
+  }
+
+  .how-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .landing-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+}

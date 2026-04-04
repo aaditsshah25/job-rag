@@ -118,9 +118,62 @@
 </head>
 
 <body>
+  <section id="marketing-shell">
+    <header class="landing-header">
+      <div class="landing-brand">JobMatchAI</div>
+      <nav class="landing-nav">
+        <a href="#how-it-works">How It Works</a>
+        <button id="startSignInBtn" class="landing-btn-secondary" type="button">Sign In</button>
+      </nav>
+    </header>
+
+    <main class="landing-main">
+      <section class="hero-section">
+        <div class="hero-copy">
+          <p class="hero-kicker">AI Career Copilot</p>
+          <h1>From resume to matched jobs in under a minute.</h1>
+          <p>JobMatchAI scans your profile, scores fit against live postings, and gives clear next steps.</p>
+          <div class="hero-actions">
+            <button id="heroHowBtn" class="landing-btn-secondary" type="button">See How It Works</button>
+            <button id="heroStartBtn" class="landing-btn-primary" type="button">Get Started</button>
+          </div>
+        </div>
+        <div class="hero-card">
+          <h3>Why teams use it</h3>
+          <ul>
+            <li>Resume parsing and profile prefill</li>
+            <li>Match scoring with gaps and strengths</li>
+            <li>Actionable next steps and cover letters</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="how-it-works" class="how-section">
+        <h2>How It Works</h2>
+        <div class="how-grid">
+          <article class="how-card">
+            <span>1</span>
+            <h3>Upload Profile</h3>
+            <p>Add your role, skills, and preferences or upload your resume PDF.</p>
+          </article>
+          <article class="how-card">
+            <span>2</span>
+            <h3>AI Matching</h3>
+            <p>Our RAG pipeline compares your profile to real job listings and ranks the best fits.</p>
+          </article>
+          <article class="how-card">
+            <span>3</span>
+            <h3>Act Faster</h3>
+            <p>Review strengths, skill gaps, and next steps, then generate tailored cover letters.</p>
+          </article>
+        </div>
+        <button id="howStartBtn" class="landing-btn-primary" type="button">Continue to Sign In</button>
+      </section>
+    </main>
+  </section>
 
   <!-- ─── AUTH GATE ─── -->
-  <div id="auth-gate">
+  <div id="auth-gate" class="hidden">
     <div class="auth-card">
       <div class="auth-logo">JobMatch<span>AI</span></div>
       <p class="auth-subtitle">RAG-powered job matching — sign in to continue</p>
@@ -133,11 +186,17 @@
       </div>
       <!-- Google One Tap / Sign-In button rendered here -->
       <div id="google-signin-btn"></div>
+      <div id="fallbackSignIn" class="hidden" style="margin-top:16px;">
+        <input id="fallbackName" type="text" placeholder="Your name" style="width:100%;margin-bottom:8px;padding:10px;border:1px solid #d5dbe5;border-radius:10px;" />
+        <input id="fallbackEmail" type="email" placeholder="name@example.com" style="width:100%;margin-bottom:8px;padding:10px;border:1px solid #d5dbe5;border-radius:10px;" />
+        <button id="fallbackSignInBtn" type="button" style="width:100%;padding:10px;border:0;border-radius:10px;background:#0d6d66;color:#fff;font-weight:600;cursor:pointer;">Continue</button>
+      </div>
       <button class="auth-sign-out" id="authSignOutBtn">Sign out</button>
     </div>
   </div>
 
   <!-- ─── HEADER ─── -->
+  <div id="app-shell" class="hidden">
   <header id="app-header">
     <div class="header-inner">
       <div class="logo">
@@ -385,6 +444,7 @@
       <div id="results-container" class="hidden">
         <div class="results-header">
           <h2>Your Job Matches</h2>
+          <button class="btn-secondary" id="debugRetrievalBtn" style="display:none">RAG Debug</button>
           <button class="btn-secondary" id="clearBtn">Clear Results</button>
           <button class="btn-secondary" id="emailResultsBtn" style="display:none">Email My Results</button>
         </div>
@@ -416,10 +476,59 @@
     </div>
   </div>
 
+  <!-- Retrieval Debug Modal -->
+  <div id="retrievalDebugModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>RAG Retrieval Debug</h3>
+        <button class="modal-close" id="closeRetrievalDebug">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="retrievalDebugContent" class="cover-letter-text"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="closeRetrievalDebugBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Application Status Modal -->
+  <div id="applicationStatusModal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3>Update Application Status</h3>
+        <button class="modal-close" id="closeApplicationStatus">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="applicationStatusJob" class="cover-letter-text" style="margin-bottom: 12px;"></div>
+        <div class="form-group">
+          <label for="applicationStatusSelect">Status</label>
+          <select id="applicationStatusSelect">
+            <option value="saved">saved</option>
+            <option value="applied">applied</option>
+            <option value="interview">interview</option>
+            <option value="offer">offer</option>
+            <option value="rejected">rejected</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="applicationNotesInput">Notes (optional)</label>
+          <textarea id="applicationNotesInput" rows="3" placeholder="Add notes for this application..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="cancelApplicationStatusBtn">Cancel</button>
+        <button class="btn-primary" id="saveApplicationStatusBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
   <script src="config.js"></script>
   <script src="data.js"></script>
+  <script src="landing.js"></script>
   <script src="auth.js"></script>
   <script src="app.js"></script>
 </body>
 
 </html>
+

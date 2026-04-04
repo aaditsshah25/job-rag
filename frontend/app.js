@@ -28,6 +28,7 @@ const form = document.getElementById('profile-form');
 const submitBtn = document.getElementById('submitBtn');
 const clearBtn = document.getElementById('clearBtn');
 const emailResultsBtn = document.getElementById('emailResultsBtn');
+const debugRetrievalBtn = document.getElementById('debugRetrievalBtn');
 
 const emptyState = document.getElementById('empty-state');
 const loadingState = document.getElementById('loading-state');
@@ -38,6 +39,7 @@ const resultsContent = document.getElementById('results-content');
 
 const experienceSlider = document.getElementById('experience');
 const experienceValue = document.getElementById('experienceValue');
+const applicationStatusByKey = new Map();
 
 // ─── DARK MODE TOGGLE ────────────────────────────────
 const darkModeToggle = document.getElementById('darkModeToggle');
@@ -88,13 +90,16 @@ function addSkillTag(skillName) {
   // Create tag element
   const tag = document.createElement('div');
   tag.className = 'skill-tag';
-  tag.innerHTML = `
-    <span>${trimmed}</span>
-    <span class="skill-tag-remove">×</span>
-  `;
+  const label = document.createElement('span');
+  label.textContent = trimmed;
+  const remove = document.createElement('span');
+  remove.className = 'skill-tag-remove';
+  remove.textContent = '×';
+  tag.appendChild(label);
+  tag.appendChild(remove);
 
   // Remove on click
-  tag.querySelector('.skill-tag-remove').addEventListener('click', () => {
+  remove.addEventListener('click', () => {
     const index = skillTags.indexOf(trimmed);
     if (index > -1) {
       skillTags.splice(index, 1);
@@ -265,13 +270,8 @@ function buildPrompt(p) {
   return prompt;
 }
 
-
-// ─── FORM SUBMISSION ────────────────────────────────
-form.addEventListener('submit', async (e) => {
-  e.preventDefault();
-
-  // Collect all form values
-  const profile = {
+function getCurrentProfileFromForm() {
+  return {
     name: document.getElementById('fullName').value.trim(),
     email: document.getElementById('email').value.trim(),
     desiredRole: document.getElementById('desiredRole').value.trim(),
@@ -287,11 +287,27 @@ form.addEventListener('submit', async (e) => {
     workAuth: document.getElementById('workAuth').value,
     additional: document.getElementById('additional').value.trim(),
   };
+}
+
+
+// ─── FORM SUBMISSION ────────────────────────────────
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+
+  // Collect all form values
+  const profile = getCurrentProfileFromForm();
+
+  if (profile.skills.length === 0) {
+    showError('Please add at least one key skill before searching.');
+    skillsInput.focus();
+    return;
+  }
 
   // Switch UI states
   showState('loading');
   submitBtn.disabled = true;
   if (emailResultsBtn) emailResultsBtn.style.display = 'none';
+  if (debugRetrievalBtn) debugRetrievalBtn.style.display = 'none';
 
   try {
     const response = await sendToBackend(profile);
@@ -309,6 +325,7 @@ clearBtn.addEventListener('click', () => {
   showState('empty');
   resultsContent.innerHTML = '';
   if (emailResultsBtn) emailResultsBtn.style.display = 'none';
+  if (debugRetrievalBtn) debugRetrievalBtn.style.display = 'none';
 });
 
 
@@ -355,7 +372,7 @@ const resumeFileInput = document.getElementById('resumeFile');
 const resumeStatus = document.getElementById('resumeStatus');
 
 async function handleResumeUpload(file) {
-  if (!file || !file.name.endsWith('.pdf')) {
+  if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
     resumeStatus.textContent = 'Only PDF files accepted.';
     resumeStatus.className = 'resume-status error';
     return;
@@ -497,23 +514,179 @@ copyCoverLetter?.addEventListener('click', () => {
   });
 });
 
+const retrievalDebugModal = document.getElementById('retrievalDebugModal');
+const retrievalDebugContent = document.getElementById('retrievalDebugContent');
+const closeRetrievalDebug = document.getElementById('closeRetrievalDebug');
+const closeRetrievalDebugBtn = document.getElementById('closeRetrievalDebugBtn');
+const applicationStatusModal = document.getElementById('applicationStatusModal');
+const applicationStatusJob = document.getElementById('applicationStatusJob');
+const applicationStatusSelect = document.getElementById('applicationStatusSelect');
+const applicationNotesInput = document.getElementById('applicationNotesInput');
+const closeApplicationStatus = document.getElementById('closeApplicationStatus');
+const cancelApplicationStatusBtn = document.getElementById('cancelApplicationStatusBtn');
+const saveApplicationStatusBtn = document.getElementById('saveApplicationStatusBtn');
+let pendingApplicationContext = null;
+
+function closeRetrievalDebugModal() {
+  retrievalDebugModal?.classList.add('hidden');
+}
+
+closeRetrievalDebug?.addEventListener('click', closeRetrievalDebugModal);
+closeRetrievalDebugBtn?.addEventListener('click', closeRetrievalDebugModal);
+retrievalDebugModal?.addEventListener('click', (e) => {
+  if (e.target === retrievalDebugModal) closeRetrievalDebugModal();
+});
+
+function closeApplicationStatusModal() {
+  applicationStatusModal?.classList.add('hidden');
+  pendingApplicationContext = null;
+}
+
+function openApplicationStatusModal(jobTitle, company) {
+  const key = appKey(jobTitle, company);
+  const state = applicationStatusByKey.get(key);
+  const currentStatus = state?.status || 'saved';
+  const currentNotes = state?.notes || '';
+  pendingApplicationContext = { jobTitle, company };
+  if (applicationStatusJob) applicationStatusJob.textContent = `${jobTitle} @ ${company}`;
+  if (applicationStatusSelect) applicationStatusSelect.value = currentStatus;
+  if (applicationNotesInput) applicationNotesInput.value = currentNotes;
+  applicationStatusModal?.classList.remove('hidden');
+}
+
+closeApplicationStatus?.addEventListener('click', closeApplicationStatusModal);
+cancelApplicationStatusBtn?.addEventListener('click', closeApplicationStatusModal);
+applicationStatusModal?.addEventListener('click', (e) => {
+  if (e.target === applicationStatusModal) closeApplicationStatusModal();
+});
+
+saveApplicationStatusBtn?.addEventListener('click', async () => {
+  if (!pendingApplicationContext) return;
+  const { jobTitle, company } = pendingApplicationContext;
+  const status = (applicationStatusSelect?.value || 'saved').toLowerCase();
+  const notes = applicationNotesInput?.value || '';
+  saveApplicationStatusBtn.disabled = true;
+  const oldText = saveApplicationStatusBtn.textContent;
+  saveApplicationStatusBtn.textContent = 'Saving...';
+  try {
+    await saveApplicationStatus(jobTitle, company, status, notes);
+    applyApplicationStatusesToUI();
+    closeApplicationStatusModal();
+  } catch (err) {
+    alert(err.message || 'Could not save application status');
+  } finally {
+    saveApplicationStatusBtn.disabled = false;
+    saveApplicationStatusBtn.textContent = oldText;
+  }
+});
+
+async function openRetrievalDebug() {
+  const profile = getCurrentProfileFromForm();
+  if (!profile.desiredRole && profile.skills.length === 0 && !profile.additional) {
+    alert('Fill at least role/skills/preferences before running retrieval debug.');
+    return;
+  }
+  retrievalDebugContent.textContent = 'Loading retrieval debug...';
+  retrievalDebugModal?.classList.remove('hidden');
+  const headers = AUTH.headers();
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/debug/retrieval', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ profile, topK: 12 }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Debug retrieval failed (${res.status})`);
+    }
+    const data = await res.json();
+    const lines = [];
+    lines.push(`Query: ${data.query}`);
+    lines.push(`Top K: ${data.top_k} | Returned: ${data.count}`);
+    lines.push('');
+    (data.candidates || []).forEach((c, i) => {
+      lines.push(`${i + 1}. ${c.title || 'Untitled'} @ ${c.company || 'Unknown'}`);
+      lines.push(`   score=${c.score} | semantic=${c.semantic_score} | lexical=${c.lexical_score}`);
+      lines.push(`   ${c.location || ''}${c.country ? ', ' + c.country : ''} | ${c.work_type || 'n/a'} | ${c.salary || 'n/a'}`);
+      if (c.skills && c.skills.length) lines.push(`   skills: ${c.skills.join(', ')}`);
+      if (c.source || c.external_url) lines.push(`   source: ${c.source || 'n/a'} ${c.external_url || ''}`);
+      lines.push('');
+    });
+    retrievalDebugContent.textContent = lines.join('\n').trim();
+  } catch (err) {
+    retrievalDebugContent.textContent = 'Error: ' + (err.message || String(err));
+  }
+}
+
+function appKey(jobTitle, company) {
+  return `${(jobTitle || '').trim()}|${(company || '').trim()}`;
+}
+
+async function loadApplicationsForSession() {
+  const headers = AUTH.headers();
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/applications/${encodeURIComponent(currentSessionId)}`, {
+      method: 'GET',
+      headers,
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    applicationStatusByKey.clear();
+    (data.applications || []).forEach((a) => {
+      applicationStatusByKey.set(appKey(a.job_title, a.company), {
+        id: a.id,
+        status: a.status || 'saved',
+        notes: a.notes || '',
+      });
+    });
+    applyApplicationStatusesToUI();
+  } catch {
+    // Keep UI functional even if applications endpoint is unavailable.
+  }
+}
+
+function applyApplicationStatusesToUI() {
+  document.querySelectorAll('.card-apply-btn').forEach((btn) => {
+    const title = btn.getAttribute('data-app-title') || '';
+    const company = btn.getAttribute('data-app-company') || '';
+    const state = applicationStatusByKey.get(appKey(title, company));
+    const status = state?.status || 'saved';
+    btn.setAttribute('data-app-status', status);
+    btn.textContent = `Status: ${status}`;
+  });
+}
+
+async function saveApplicationStatus(jobTitle, company, status, notes) {
+  const headers = AUTH.headers();
+  const res = await fetch(CONFIG.API_BASE_URL + '/applications', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      session_id: currentSessionId,
+      job_title: jobTitle,
+      company,
+      status,
+      notes: notes || '',
+    }),
+  });
+  if (!res.ok) {
+    const d = await res.json().catch(() => ({}));
+    throw new Error(d.detail || `Application save failed (${res.status})`);
+  }
+  const data = await res.json();
+  applicationStatusByKey.set(appKey(jobTitle, company), {
+    id: data.application_id,
+    status,
+    notes: notes || '',
+  });
+}
+
+debugRetrievalBtn?.addEventListener('click', () => {
+  openRetrievalDebug();
+});
+
 async function generateCoverLetter(jobTitle, company, jobDescription) {
-  const profile = {
-    name: document.getElementById('fullName').value.trim(),
-    email: document.getElementById('email').value.trim(),
-    desiredRole: document.getElementById('desiredRole').value.trim(),
-    experience: parseInt(experienceSlider.value, 10),
-    skills: skillTags.slice(),
-    education: document.getElementById('education').value,
-    industry: document.getElementById('industry').value.trim(),
-    location: document.getElementById('location').value.trim(),
-    workType: document.getElementById('workType').value,
-    salaryMin: document.getElementById('salaryMin').value ? parseInt(document.getElementById('salaryMin').value, 10) : null,
-    companySize: document.getElementById('companySize').value,
-    benefits: Array.from(document.querySelectorAll('input[name="benefits"]:checked')).map(cb => cb.value),
-    workAuth: document.getElementById('workAuth').value,
-    additional: document.getElementById('additional').value.trim(),
-  };
+  const profile = getCurrentProfileFromForm();
 
   if (coverLetterContent) coverLetterContent.textContent = 'Generating cover letter...';
   if (coverLetterModal) coverLetterModal.classList.remove('hidden');
@@ -557,9 +730,13 @@ function cleanResponse(text) {
 
 // ─── CLEAN BULLET TEXT ──────────────────────────────
 function cleanBulletText(text) {
-  let t = text.replace(/^[-•]\s*/, '').replace(/\*\*/g, '').trim();
+  let t = text.replace(/^[-*•â€¢]\s*/, '').replace(/\*\*/g, '').trim();
   t = t.replace(/^(Most important next step|Skill to highlight or develop|Question to ask recruiters?|Highlight or develop):\s*/i, '');
   return t;
+}
+
+function isBulletLine(text) {
+  return /^[-*•â€¢]\s+/.test((text || '').trim());
 }
 
 
@@ -575,6 +752,8 @@ function displayResults(markdown) {
   }
   showState('results');
   if (emailResultsBtn) emailResultsBtn.style.display = '';
+  if (debugRetrievalBtn) debugRetrievalBtn.style.display = '';
+  loadApplicationsForSession();
 }
 
 
@@ -722,7 +901,7 @@ function renderJobCard(job, rank) {
     }
     if (clean.toLowerCase().includes('why it match')) { currentList = 'reasons'; continue; }
     if (clean.toLowerCase().includes('gap')) {
-      if (raw.startsWith('-') || raw.startsWith('•')) { gaps.push(cleanBulletText(raw)); }
+      if (isBulletLine(raw)) { gaps.push(cleanBulletText(raw)); }
       currentList = 'gaps'; continue;
     }
     if (clean.toLowerCase().startsWith('experience')) {
@@ -730,7 +909,7 @@ function renderJobCard(job, rank) {
       currentList = null; continue;
     }
 
-    if (raw.startsWith('-') || raw.startsWith('•')) {
+    if (isBulletLine(raw)) {
       const item = cleanBulletText(raw);
       if (!item) continue;
       if (currentList === 'reasons') reasons.push(item);
@@ -796,6 +975,15 @@ function renderJobCard(job, rank) {
     data-cl-company="${esc(company)}"
     data-cl-desc="${esc(jobDescription.trim().slice(0, 300))}">
     Cover Letter
+  </button>`;
+
+  const appState = applicationStatusByKey.get(appKey(jobTitle, company));
+  const appStatus = appState?.status || 'saved';
+  html += `<button class="card-apply-btn" title="Track application status"
+    data-app-title="${esc(jobTitle)}"
+    data-app-company="${esc(company)}"
+    data-app-status="${esc(appStatus)}">
+    Status: ${esc(appStatus)}
   </button>`;
 
   // Bookmark button
@@ -874,7 +1062,7 @@ function renderActionsCard(section) {
     const match = trimmed.match(/^\d+[.\)]\s*(.+)/);
     if (match) {
       steps.push(cleanBulletText(match[1]));
-    } else if (trimmed.startsWith('-') || trimmed.startsWith('•')) {
+    } else if (isBulletLine(trimmed)) {
       steps.push(cleanBulletText(trimmed));
     } else if (trimmed.includes(':')) {
       const afterColon = trimmed.substring(trimmed.indexOf(':') + 1).trim();
@@ -908,6 +1096,7 @@ function wireCardInteractions() {
       if (e.target.closest('[data-copy-card]')) return;
       if (e.target.closest('.card-bookmark-btn')) return;
       if (e.target.closest('.card-cover-letter-btn')) return;
+      if (e.target.closest('.card-apply-btn')) return;
       const card = header.closest('.job-card');
       if (card) card.classList.toggle('collapsed');
     });
@@ -968,6 +1157,16 @@ function wireCardInteractions() {
       await generateCoverLetter(title, company, desc);
     });
   });
+
+  // Application tracking
+  document.querySelectorAll('.card-apply-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const title = btn.getAttribute('data-app-title') || '';
+      const company = btn.getAttribute('data-app-company') || '';
+      openApplicationStatusModal(title, company);
+    });
+  });
 }
 
 
@@ -985,7 +1184,7 @@ function renderBasicContent(text) {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
   html = html.replace(/^---$/gm, '<hr />');
-  html = html.replace(/^[\-•] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^[-*•â€¢] (.+)$/gm, '<li>$1</li>');
   html = html.replace(/^\d+[.\)] (.+)$/gm, '<li>$1</li>');
   html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
   html = html.split(/\n\n+/).map(block => {

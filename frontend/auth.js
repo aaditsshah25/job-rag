@@ -1,10 +1,11 @@
-/* ══════════════════════════════════════════════════════
-   JobMatch AI — Google SSO Authentication
-   ══════════════════════════════════════════════════════ */
+/*
+   JobMatch AI - Authentication and view flow
+*/
 
 const AUTH = {
   TOKEN_KEY: 'jobmatch_jwt',
   USER_KEY: 'jobmatch_user',
+  _gsiInitialized: false,
 
   getToken() {
     return localStorage.getItem(this.TOKEN_KEY);
@@ -39,7 +40,11 @@ const AUTH = {
   isAuthenticated() {
     const token = this.getToken();
     if (!token) return false;
-    // Check expiry from JWT payload (no signature verification — server does that)
+
+    if (token.startsWith('local_')) {
+      return !!this.getUser();
+    }
+
     try {
       const payload = this.decodeJwtPayload(token);
       return payload.exp * 1000 > Date.now();
@@ -48,21 +53,75 @@ const AUTH = {
     }
   },
 
-  // Returns headers object with Authorization if token present
   headers(extra = {}) {
     const token = this.getToken();
     const h = { 'Content-Type': 'application/json', ...extra };
-    if (token) h['Authorization'] = `Bearer ${token}`;
+    if (token && !token.startsWith('local_')) h.Authorization = `Bearer ${token}`;
     if (CONFIG.API_KEY) h['X-Api-Key'] = CONFIG.API_KEY;
     return h;
   },
 
-  // Called by Google Identity Services after user picks account
+  showMarketing() {
+    document.getElementById('marketing-shell')?.classList.remove('hidden');
+    document.getElementById('app-shell')?.classList.add('hidden');
+    document.getElementById('auth-gate')?.classList.add('hidden');
+  },
+
+  showApp() {
+    document.getElementById('marketing-shell')?.classList.add('hidden');
+    document.getElementById('app-shell')?.classList.remove('hidden');
+    document.getElementById('auth-gate')?.classList.add('hidden');
+  },
+
+  showAuthGate() {
+    document.getElementById('auth-gate')?.classList.remove('hidden');
+
+    const fallback = document.getElementById('fallbackSignIn');
+    if (!CONFIG.GOOGLE_CLIENT_ID && fallback) {
+      fallback.classList.remove('hidden');
+    }
+
+    if (CONFIG.GOOGLE_CLIENT_ID) {
+      this.ensureGSIInitialized();
+    }
+  },
+
+  ensureGSIInitialized() {
+    if (this._gsiInitialized) return;
+    if (!window.google || !google.accounts || !google.accounts.id) return;
+
+    google.accounts.id.initialize({
+      client_id: CONFIG.GOOGLE_CLIENT_ID,
+      callback: this.handleGoogleCredential.bind(this),
+      auto_select: false,
+      cancel_on_tap_outside: false,
+    });
+
+    const btnHost = document.getElementById('google-signin-btn');
+    if (btnHost) {
+      btnHost.innerHTML = '';
+      google.accounts.id.renderButton(btnHost, {
+        theme: 'outline',
+        size: 'large',
+        width: 320,
+        text: 'signin_with',
+        shape: 'rectangular',
+        logo_alignment: 'left',
+      });
+    }
+
+    google.accounts.id.prompt();
+    this._gsiInitialized = true;
+  },
+
   async handleGoogleCredential(response) {
     try {
       const res = await fetch(CONFIG.API_BASE_URL + '/auth/google', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(CONFIG.API_KEY ? { 'X-Api-Key': CONFIG.API_KEY } : {}) },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(CONFIG.API_KEY ? { 'X-Api-Key': CONFIG.API_KEY } : {}),
+        },
         body: JSON.stringify({ credential: response.credential }),
       });
 
@@ -73,30 +132,51 @@ const AUTH = {
 
       const data = await res.json();
       const user = data.user || {};
-      AUTH.saveSession(data.access_token, user);
-      AUTH.onSignIn(user);
+      this.saveSession(data.access_token, user);
+      this.onSignIn(user);
     } catch (err) {
       console.error('Google auth error:', err);
       alert('Sign-in failed: ' + err.message);
     }
   },
 
-  onSignIn(user) {
-    // Hide gate, show app
-    document.getElementById('auth-gate').classList.add('hidden');
+  handleLocalFallbackSignIn() {
+    const name = document.getElementById('fallbackName')?.value.trim() || 'Guest User';
+    const email = document.getElementById('fallbackEmail')?.value.trim() || 'guest@example.com';
+    const token = `local_${Date.now()}`;
+    this.saveSession(token, { name, email, picture: '' });
+    this.onSignIn({ name, email, picture: '' });
+  },
 
-    // Update header
+  onSignIn(user) {
+    this.showApp();
+
     const pic = user.picture || '';
     const name = user.name || user.email || '';
     const headerPic = document.getElementById('headerUserPic');
     const headerName = document.getElementById('auth-header-name');
     const signOutBtn = document.getElementById('signOutHeaderBtn');
 
-    if (pic) { headerPic.src = pic; headerPic.style.display = 'block'; }
-    if (name) { headerName.textContent = name; headerName.style.display = 'block'; }
+    if (headerPic) {
+      if (pic) {
+        headerPic.src = pic;
+        headerPic.style.display = 'block';
+      } else {
+        headerPic.style.display = 'none';
+      }
+    }
+
+    if (headerName) {
+      if (name) {
+        headerName.textContent = name;
+        headerName.style.display = 'block';
+      } else {
+        headerName.style.display = 'none';
+      }
+    }
+
     if (signOutBtn) signOutBtn.style.display = 'inline-block';
 
-    // Pre-fill email/name in form if fields are empty
     const emailField = document.getElementById('email');
     const nameField = document.getElementById('fullName');
     if (emailField && !emailField.value && user.email) emailField.value = user.email;
@@ -104,67 +184,37 @@ const AUTH = {
   },
 
   signOut() {
-    AUTH.clearSession();
-    // Revoke Google session
+    this.clearSession();
     if (window.google && google.accounts && google.accounts.id) {
       google.accounts.id.disableAutoSelect();
     }
-    location.reload();
+    this.showMarketing();
   },
 
   init() {
-    // If Google Client ID not configured — skip auth gate entirely
-    if (!CONFIG.GOOGLE_CLIENT_ID) {
-      document.getElementById('auth-gate').classList.add('hidden');
-      return;
+    document.getElementById('authSignOutBtn')?.addEventListener('click', this.signOut.bind(this));
+    document.getElementById('signOutHeaderBtn')?.addEventListener('click', this.signOut.bind(this));
+    document.getElementById('fallbackSignInBtn')?.addEventListener('click', this.handleLocalFallbackSignIn.bind(this));
+
+    if (this.isAuthenticated()) {
+      const user = this.getUser();
+      this.onSignIn(user || {});
+    } else {
+      this.showMarketing();
     }
 
-    // Already signed in
-    if (AUTH.isAuthenticated()) {
-      const user = AUTH.getUser();
-      if (user) { AUTH.onSignIn(user); return; }
-    }
-
-    // Show gate, initialize Google Sign-In
-    window.addEventListener('load', () => {
-      if (!window.google) {
-        // GSI script not yet loaded — wait
-        const script = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
-        if (script) script.addEventListener('load', AUTH._initGSI.bind(AUTH));
-      } else {
-        AUTH._initGSI();
+    window.startSignInFlow = () => {
+      this.showAuthGate();
+      if (CONFIG.GOOGLE_CLIENT_ID) {
+        if (window.google) {
+          this.ensureGSIInitialized();
+        } else {
+          const script = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+          script?.addEventListener('load', () => this.ensureGSIInitialized(), { once: true });
+        }
       }
-    });
-
-    // Sign-out buttons
-    document.getElementById('authSignOutBtn')?.addEventListener('click', AUTH.signOut);
-    document.getElementById('signOutHeaderBtn')?.addEventListener('click', AUTH.signOut);
-  },
-
-  _initGSI() {
-    google.accounts.id.initialize({
-      client_id: CONFIG.GOOGLE_CLIENT_ID,
-      callback: AUTH.handleGoogleCredential.bind(AUTH),
-      auto_select: false,
-      cancel_on_tap_outside: false,
-    });
-
-    google.accounts.id.renderButton(
-      document.getElementById('google-signin-btn'),
-      {
-        theme: 'outline',
-        size: 'large',
-        width: 320,
-        text: 'signin_with',
-        shape: 'rectangular',
-        logo_alignment: 'left',
-      }
-    );
-
-    // Also show One Tap prompt
-    google.accounts.id.prompt();
+    };
   },
 };
 
-// Bootstrap auth on DOM ready
 document.addEventListener('DOMContentLoaded', () => AUTH.init());
