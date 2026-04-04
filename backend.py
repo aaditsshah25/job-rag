@@ -31,7 +31,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
@@ -656,9 +656,19 @@ async def health():
 
 @app.post("/webhook", response_model=WebhookResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
-async def webhook(request: Request, req: WebhookRequest):
+async def webhook(request: Request):
     request_id = str(uuid.uuid4())[:8]
     log.info("[%s] /webhook called", request_id)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON body")
+
+    try:
+        req = WebhookRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors())
 
     if req.profile:
         query = build_query_from_profile(req.profile)
