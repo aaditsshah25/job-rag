@@ -5,10 +5,23 @@
 // CONFIG is loaded from config.js
 
 // ─── SESSION ID ───────────────────────────────────────
-let currentSessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+const SESSION_ID_KEY = 'jobmatch_session_id';
+let currentSessionId = localStorage.getItem(SESSION_ID_KEY);
+if (!currentSessionId) {
+  currentSessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  localStorage.setItem(SESSION_ID_KEY, currentSessionId);
+}
 
 // ─── BOOKMARKS (localStorage) ─────────────────────────
-const bookmarkedJobs = new Set(JSON.parse(localStorage.getItem('jobmatch_bookmarks') || '[]'));
+let bookmarkedJobsData = [];
+try {
+  const storedBookmarks = localStorage.getItem('jobmatch_bookmarks') || '[]';
+  const parsedBookmarks = JSON.parse(storedBookmarks);
+  bookmarkedJobsData = Array.isArray(parsedBookmarks) ? parsedBookmarks : [];
+} catch {
+  bookmarkedJobsData = [];
+}
+const bookmarkedJobs = new Set(bookmarkedJobsData);
 
 // ─── DOM ELEMENTS ────────────────────────────────────
 const form = document.getElementById('profile-form');
@@ -429,7 +442,7 @@ async function saveBookmark(jobTitle, company, location, salary, matchScore) {
   const bookmarkKey = jobTitle + '|' + company;
   const headers = AUTH.headers();
   try {
-    await fetch(CONFIG.API_BASE_URL + '/bookmark', {
+    const res = await fetch(CONFIG.API_BASE_URL + '/bookmark', {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -442,6 +455,10 @@ async function saveBookmark(jobTitle, company, location, salary, matchScore) {
         job_data: { title: jobTitle, company, location, salary },
       }),
     });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Bookmark save failed (${res.status})`);
+    }
     bookmarkedJobs.add(bookmarkKey);
     localStorage.setItem('jobmatch_bookmarks', JSON.stringify([...bookmarkedJobs]));
   } catch (err) {
@@ -926,11 +943,16 @@ function wireCardInteractions() {
       const bookmarkKey = title + '|' + company;
 
       if (!bookmarkedJobs.has(bookmarkKey)) {
+        const previousState = btn.classList.contains('bookmarked');
         await saveBookmark(title, company, location, salary, score);
-        btn.classList.add('bookmarked');
-        const svgPath = btn.querySelector('path');
-        if (svgPath) {
-          btn.querySelector('svg').setAttribute('fill', 'currentColor');
+        if (bookmarkedJobs.has(bookmarkKey)) {
+          btn.classList.add('bookmarked');
+          const svgPath = btn.querySelector('path');
+          if (svgPath) {
+            btn.querySelector('svg').setAttribute('fill', 'currentColor');
+          }
+        } else if (previousState) {
+          btn.classList.add('bookmarked');
         }
       }
     });

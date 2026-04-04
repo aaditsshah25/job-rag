@@ -110,6 +110,11 @@ FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
 JWT_SECRET        = os.getenv("JWT_SECRET", "change-me-in-production")
 JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
+INDEX_ON_STARTUP  = os.getenv("INDEX_ON_STARTUP", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cors_allowlist() -> list[str]:
+    return ["*"]
 
 # ─── Lazy singletons ──────────────────────────────────
 _openai_client = None
@@ -178,6 +183,8 @@ async def verify_api_key(request: Request):
 def _create_jwt(email: str, name: str, picture: str) -> str:
     if not _JOSE_AVAILABLE:
         return ""
+    if not JWT_SECRET or JWT_SECRET == "change-me-in-production":
+        raise HTTPException(status_code=500, detail="JWT_SECRET must be configured when Google sign-in is enabled")
     expire = datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS)
     payload = {"sub": email, "name": name, "picture": picture, "exp": expire}
     return jose_jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -510,11 +517,13 @@ async def lifespan(app: FastAPI):
         scheduler.add_job(_scheduled_alert_digest_job, CronTrigger(hour=8, minute=0), id="jobmatch_alert_digest", replace_existing=True)
         scheduler.start()
 
-    if OPENAI_API_KEY and PINECONE_API_KEY:
+    if INDEX_ON_STARTUP and OPENAI_API_KEY and PINECONE_API_KEY:
         try:
             index_dataset(force=False)
         except Exception as e:
             log.error("Auto-index failed: %s", e)
+    elif INDEX_ON_STARTUP:
+        log.warning("INDEX_ON_STARTUP is enabled, but OPENAI_API_KEY or PINECONE_API_KEY is missing; skipping auto-index.")
 
     app.state.scheduler = scheduler
     yield
@@ -531,8 +540,8 @@ if _SLOWAPI_AVAILABLE:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "*").split(","),
-    allow_credentials=True,
+    allow_origins=_cors_allowlist(),
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )

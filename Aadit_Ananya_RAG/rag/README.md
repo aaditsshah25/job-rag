@@ -19,15 +19,15 @@ cp .env.example .env
 **Step 2 — Start the backend**
 
 ```bash
-uvicorn backend:app --reload --port 8000
+start.bat
 ```
 
-The first startup automatically indexes the 2,000 job listings into Pinecone.
-This takes ~5 minutes (one-time only). Subsequent starts skip re-indexing.
+The first startup can index the 2,000 job listings into Pinecone if you enable `INDEX_ON_STARTUP=1`.
+For Railway and other production deploys, it is safer to leave startup indexing off and trigger `POST /index?force=true` once after deployment.
 
 **Step 3 — Open the app**
 
-Open `frontend/index.html` in your browser. No build step needed.
+`start.bat` opens the app automatically in your default browser at `http://127.0.0.1:5500/index.html`. No build step needed.
 
 ---
 
@@ -96,4 +96,4 @@ rag/
 | "RuntimeError: OPENAI_API_KEY is not set" | Add keys to `.env` file |
 | Empty results | Check Pinecone index — hit `POST /index?force=true` to re-index |
 | Port 8000 in use | Run `uvicorn backend:app --port 8001` and update `N8N_WEBHOOK_URL` in `app.js` |
-| First request slow | Indexing runs on startup; wait for "Indexing complete" log line |
+| First request slow | If you enabled `INDEX_ON_STARTUP=1`, wait for the indexing log line; otherwise run `POST /index?force=true` once |

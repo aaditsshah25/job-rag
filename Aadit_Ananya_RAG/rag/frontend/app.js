@@ -5,7 +5,12 @@
 // CONFIG is loaded from config.js
 
 // ─── SESSION ID ───────────────────────────────────────
-let currentSessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+const SESSION_ID_KEY = 'jobmatch_session_id';
+let currentSessionId = localStorage.getItem(SESSION_ID_KEY);
+if (!currentSessionId) {
+  currentSessionId = `session_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  localStorage.setItem(SESSION_ID_KEY, currentSessionId);
+}
 
 // ─── BOOKMARKS (localStorage) ─────────────────────────
 let bookmarkedJobsData = [];
@@ -713,7 +718,7 @@ async function saveBookmark(jobTitle, company, location, salary, matchScore) {
   const headers = { 'Content-Type': 'application/json' };
   if (CONFIG.API_KEY) headers['X-Api-Key'] = CONFIG.API_KEY;
   try {
-    await fetch(CONFIG.API_BASE_URL + '/bookmark', {
+    const res = await fetch(CONFIG.API_BASE_URL + '/bookmark', {
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -726,6 +731,10 @@ async function saveBookmark(jobTitle, company, location, salary, matchScore) {
         job_data: { title: jobTitle, company, location, salary },
       }),
     });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Bookmark save failed (${res.status})`);
+    }
     bookmarkedJobs.add(bookmarkKey);
     localStorage.setItem('jobmatch_bookmarks', JSON.stringify([...bookmarkedJobs]));
   } catch (err) {
@@ -1502,10 +1511,12 @@ function wireCardInteractions() {
 
       if (!bookmarkedJobs.has(bookmarkKey)) {
         await saveBookmark(title, company, location, salary, score);
-        btn.classList.add('bookmarked');
-        const svgPath = btn.querySelector('path');
-        if (svgPath) {
-          btn.querySelector('svg').setAttribute('fill', 'currentColor');
+        if (bookmarkedJobs.has(bookmarkKey)) {
+          btn.classList.add('bookmarked');
+          const svgPath = btn.querySelector('path');
+          if (svgPath) {
+            btn.querySelector('svg').setAttribute('fill', 'currentColor');
+          }
         }
       }
     });

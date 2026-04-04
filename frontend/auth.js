@@ -28,12 +28,20 @@ const AUTH = {
     localStorage.removeItem(this.USER_KEY);
   },
 
+  decodeJwtPayload(token) {
+    const payloadSegment = token.split('.')[1] || '';
+    const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = normalized.length % 4;
+    const base64 = normalized + (padding ? '='.repeat(4 - padding) : '');
+    return JSON.parse(atob(base64));
+  },
+
   isAuthenticated() {
     const token = this.getToken();
     if (!token) return false;
     // Check expiry from JWT payload (no signature verification — server does that)
     try {
-      const payload = JSON.parse(atob(token.split('.')[1]));
+      const payload = this.decodeJwtPayload(token);
       return payload.exp * 1000 > Date.now();
     } catch {
       return false;
