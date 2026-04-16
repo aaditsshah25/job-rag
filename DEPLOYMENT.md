@@ -4,11 +4,22 @@
 
 ```
 GitHub (aaditsshah25/job-rag)
-  ├── Push to main → GitHub Actions CI (build check)
-  ├── frontend/          → Vercel project "frontend"   (legacy HTML/JS app)
-  ├── frontend-react/    → Vercel project "frontend-react" (React landing page)
+  ├── Push to main → auto-deploys both Vercel + Railway
+  ├── frontend-react/    → Vercel project "frontend-react" (ONE project, serves everything)
+  │     ├── /            → React landing page (SaaS)
+  │     └── /app         → Main HTML/JS app (copied into dist/app at build time)
   └── backend.py         → Railway (Python FastAPI)
 ```
+
+## Live URLs
+
+| Service | URL |
+|---|---|
+| Landing page | https://jobmatch-ai-app.vercel.app |
+| Main app | https://jobmatch-ai-app.vercel.app/app |
+| Backend API | https://job-rag-production.up.railway.app |
+| Vercel project | frontend-react (aadits-projects-b151595d) |
+| Latest deployment | frontend-react-3563p2tr7-aadits-projects-b151595d.vercel.app |
 
 ---
 
@@ -32,14 +43,7 @@ GitHub (aaditsshah25/job-rag)
 ALLOWED_ORIGINS=https://jobmatch-ai-app.vercel.app,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000
 ```
 
-### Frontend — legacy (Vercel project: "frontend")
-| Variable | Description | Example |
-|---|---|---|
-| `JOBMATCH_API_URL` | Backend public URL | `https://job-rag-production.up.railway.app` |
-| `JOBMATCH_API_KEY` | Same as backend `JOBMATCH_API_KEY` | same random string |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID | `680440...apps.googleusercontent.com` |
-
-### Frontend React (Vercel project: "frontend-react")
+### Frontend (Vercel project: "frontend-react")
 | Variable | Description | Example |
 |---|---|---|
 | `VITE_API_BASE_URL` | Backend public URL (no trailing slash) | `https://job-rag-production.up.railway.app` |
