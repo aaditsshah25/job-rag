@@ -22,8 +22,28 @@
 </head>
 
 <body>
+
+  <!-- ─── AUTH GATE ─── -->
+  <div id="auth-gate" class="hidden">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <span class="logo-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
+        <span class="logo-text">JobMatch<span class="logo-accent">AI</span></span>
+      </div>
+      <h2 class="auth-heading">Sign in to get started</h2>
+      <p class="auth-subtext">Upload your resume and get AI-matched to your ideal jobs in seconds.</p>
+      <div id="google-signin-btn" class="google-signin-slot"></div>
+      <div id="fallbackSignIn" class="fallback-signin hidden">
+        <p class="fallback-label">Or continue without Google:</p>
+        <input type="text" id="fallbackName" placeholder="Your name" class="fallback-input" />
+        <input type="email" id="fallbackEmail" placeholder="your@email.com" class="fallback-input" />
+        <button id="fallbackSignInBtn" class="btn-primary" style="width:100%;margin-top:8px;">Continue</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ─── HEADER ─── -->
-  <div id="app-shell">
+  <div id="app-shell" class="hidden">
   <header id="app-header">
     <div class="header-inner">
       <div class="logo">
@@ -34,9 +54,14 @@
         <span class="logo-text">JobMatch<span class="logo-accent">AI</span></span>
       </div>
       <p class="tagline">RAG-Powered Job Recommendations</p>
-      <button id="darkModeToggle" class="btn-secondary dark-mode-btn" title="Toggle dark mode">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-      </button>
+      <div class="header-user">
+        <img id="headerUserPic" src="" alt="User" class="header-user-pic" style="display:none;width:28px;height:28px;border-radius:50%;object-fit:cover;" />
+        <span id="auth-header-name" class="header-user-name" style="display:none;font-size:0.82rem;font-weight:600;color:var(--text-secondary);"></span>
+        <button id="signOutHeaderBtn" class="btn-secondary" style="display:none;font-size:0.78rem;padding:4px 10px;">Sign out</button>
+        <button id="darkModeToggle" class="btn-secondary dark-mode-btn" title="Toggle dark mode">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -285,9 +310,12 @@
     </div>
   </div>
 
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="config.js?v=2"></script>
   <script src="data.js?v=2"></script>
+  <script src="auth.js?v=2"></script>
   <script src="app.js?v=2"></script>
+  <script src="landing.js?v=2"></script>
 </body>
 
 </html>
