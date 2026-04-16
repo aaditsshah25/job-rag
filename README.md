@@ -2,6 +2,8 @@
 
 AI-powered job matching using FastAPI, Pinecone, and OpenAI models.
 
+Detailed architecture documentation: see `ARCHITECTURE.md`.
+
 ## Quick Start
 
 1. Install dependencies and create `.env`:
