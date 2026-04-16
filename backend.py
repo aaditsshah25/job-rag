@@ -31,7 +31,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -236,6 +236,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="JobMatch AI Backend", version="2.0.0", lifespan=lifespan)
 
 FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
+REACT_FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend-react", "dist")
 
 if _SLOWAPI_AVAILABLE:
     app.state.limiter = limiter
@@ -782,6 +783,7 @@ Resume text:
         parsed = {}
 
     parsed["raw_text"] = text[:4000]
+    parsed["resume_text"] = parsed["raw_text"]  # alias for compatibility
     return parsed
 
 
@@ -1139,5 +1141,12 @@ async def get_resume_tailoring(session_id: str):
         result.append(item)
     return {"tailoring": result}
 
+
+if os.path.isdir(REACT_FRONTEND_DIR):
+    @app.get("/react")
+    async def react_root_redirect():
+        return RedirectResponse(url="/react/")
+
+    app.mount("/react", StaticFiles(directory=REACT_FRONTEND_DIR, html=True), name="frontend-react")
 
 app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

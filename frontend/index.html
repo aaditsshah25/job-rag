@@ -47,7 +47,7 @@
       margin-bottom: 8px;
       color: var(--text-primary, #0f172a);
     }
-    .auth-logo span { color: #6366f1; }
+    .auth-logo span { color: var(--accent, #0d6d66); }
     .auth-subtitle {
       color: var(--text-secondary, #64748b);
       font-size: 0.92rem;
@@ -260,9 +260,9 @@
       <!-- Google One Tap / Sign-In button rendered here -->
       <div id="google-signin-btn"></div>
       <div id="fallbackSignIn" class="hidden" style="margin-top:16px;">
-        <input id="fallbackName" type="text" placeholder="Your name" style="width:100%;margin-bottom:8px;padding:10px;border:1px solid #d5dbe5;border-radius:10px;" />
-        <input id="fallbackEmail" type="email" placeholder="name@example.com" style="width:100%;margin-bottom:8px;padding:10px;border:1px solid #d5dbe5;border-radius:10px;" />
-        <button id="fallbackSignInBtn" type="button" style="width:100%;padding:10px;border:0;border-radius:10px;background:#0d6d66;color:#fff;font-weight:600;cursor:pointer;">Continue</button>
+        <input id="fallbackName" class="auth-fallback-input" type="text" placeholder="Your name" />
+        <input id="fallbackEmail" class="auth-fallback-input" type="email" placeholder="name@example.com" />
+        <button id="fallbackSignInBtn" class="auth-fallback-btn" type="button">Continue</button>
       </div>
       <button class="auth-sign-out" id="authSignOutBtn">Sign out</button>
     </div>

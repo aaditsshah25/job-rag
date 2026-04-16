@@ -1178,7 +1178,7 @@ async def index_endpoint(force: bool = False, _: None = Depends(verify_api_key))
 
 @app.post("/parse-resume", dependencies=[Depends(verify_api_key), Depends(verify_jwt)])
 async def parse_resume(file: UploadFile = File(...)):
-    if not file.filename.endswith(".pdf"):
+    if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
     if not _PDFPLUMBER_AVAILABLE:
         raise HTTPException(status_code=503, detail="pdfplumber is not installed on this server")
@@ -1222,6 +1222,7 @@ Resume text:
 
     # Keep a bounded raw text snapshot for downstream resume tailoring.
     parsed["resume_text"] = text[:6000]
+    parsed["raw_text"] = parsed["resume_text"]  # alias for frontend compatibility
 
     return parsed
 

@@ -312,7 +312,7 @@ async function handleResumeUpload(file) {
     resumeStatus.className = 'resume-status success';
     // Store file for enhancement feature
     lastResumeFile = file;
-    if (data.raw_text) lastResumeText = data.raw_text;
+    if (data.raw_text || data.resume_text) lastResumeText = data.raw_text || data.resume_text;
     const enhancePanel = document.getElementById('resume-enhance-panel');
     if (enhancePanel) enhancePanel.classList.remove('hidden');
   } catch (err) {
@@ -1194,7 +1194,7 @@ async function callEnhanceResume(file) {
       throw new Error(d.detail || `Server error ${res.status}`);
     }
     const data = await res.json();
-    if (data.raw_text) lastResumeText = data.raw_text;
+    if (data.raw_text || data.resume_text) lastResumeText = data.raw_text || data.resume_text;
 
     if (statusEl) { statusEl.textContent = ''; statusEl.className = 'enhance-status'; }
 
