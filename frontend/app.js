@@ -4,6 +4,15 @@
 
 // CONFIG is loaded from config.js
 
+// Auth stub — no login required
+const AUTH = {
+  headers(extra = {}) {
+    const h = { 'Content-Type': 'application/json', ...extra };
+    if (CONFIG.API_KEY) h['X-Api-Key'] = CONFIG.API_KEY;
+    return h;
+  },
+};
+
 // ─── SESSION ID ───────────────────────────────────────
 const SESSION_ID_KEY = 'jobmatch_session_id';
 let currentSessionId = localStorage.getItem(SESSION_ID_KEY);
