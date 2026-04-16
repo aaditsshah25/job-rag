@@ -15,6 +15,7 @@ from typing import Any
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 log = logging.getLogger(__name__)
 
 
@@ -72,6 +73,54 @@ def _normalize_record(source: str, raw: dict[str, Any]) -> dict[str, Any]:
         "source": source,
         "external_url": _safe_str(raw.get("external_url")),
     }
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in _TRUE_VALUES
+
+
+def _list_env(name: str) -> list[str]:
+    return [x.strip().lower() for x in os.getenv(name, "").split(",") if x.strip()]
+
+
+def _is_india_job(job: dict[str, Any], include_remote: bool = True) -> bool:
+    country = _safe_str(job.get("country")).lower()
+    location = _safe_str(job.get("location")).lower()
+    work_type = _safe_str(job.get("work_type")).lower()
+    title = _safe_str(job.get("title")).lower()
+    desc = _safe_str(job.get("description")).lower()
+    haystack = " ".join([country, location, work_type, title, desc])
+
+    if "india" in haystack or country in {"in", "ind", "india"}:
+        return True
+
+    # Major India hiring hubs; keeps third-party ATS/remote feeds useful.
+    india_hubs = [
+        "bengaluru",
+        "bangalore",
+        "hyderabad",
+        "pune",
+        "mumbai",
+        "gurgaon",
+        "gurugram",
+        "noida",
+        "delhi",
+        "new delhi",
+        "chennai",
+        "kolkata",
+        "ahmedabad",
+        "coimbatore",
+        "india only",
+    ]
+    if any(city in haystack for city in india_hubs):
+        return True
+
+    if include_remote:
+        return "remote" in haystack and ("india" in haystack or "asia" in haystack)
+    return False
 
 
 def _get_json(url: str, headers: dict[str, str] | None = None) -> Any:
@@ -147,44 +196,62 @@ def fetch_usajobs(max_items: int = 150) -> list[dict[str, Any]]:
     return out
 
 
-def fetch_adzuna(max_items: int = 100) -> list[dict[str, Any]]:
+def fetch_adzuna(max_items: int = 300) -> list[dict[str, Any]]:
     app_id = os.getenv("ADZUNA_APP_ID", "")
     app_key = os.getenv("ADZUNA_APP_KEY", "")
     country = os.getenv("ADZUNA_COUNTRY", "us")
     if not app_id or not app_key:
         return []
 
-    results_per_page = max(1, min(max_items, 50))
+    # Adzuna returns up to 50 listings per page.
+    results_per_page = max(1, min(int(os.getenv("ADZUNA_RESULTS_PER_PAGE", "50")), 50))
+    max_pages = max(1, int(os.getenv("ADZUNA_MAX_PAGES", "6")))
     what = quote(os.getenv("ADZUNA_WHAT", "software engineer"))
     where = quote(os.getenv("ADZUNA_WHERE", "united states"))
-    url = (
-        f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
-        f"?app_id={app_id}&app_key={app_key}&results_per_page={results_per_page}"
-        f"&what={what}&where={where}&content-type=application/json"
-    )
-    payload = _get_json(url)
     out: list[dict[str, Any]] = []
-    for job in payload.get("results", []):
-        out.append(
-            _normalize_record(
-                "adzuna",
-                {
-                    "job_id": job.get("id"),
-                    "title": job.get("title"),
-                    "company": (job.get("company") or {}).get("display_name"),
-                    "location": (job.get("location") or {}).get("display_name"),
-                    "country": country.upper(),
-                    "work_type": "",
-                    "salary": _to_salary_text(job.get("salary_min"), job.get("salary_max")),
-                    "description": job.get("description"),
-                    "skills": [],
-                    "industry": (job.get("category") or {}).get("label"),
-                    "posting_date": job.get("created"),
-                    "portal": "Adzuna",
-                    "external_url": job.get("redirect_url"),
-                },
-            )
+    seen_ids: set[str] = set()
+
+    for page in range(1, max_pages + 1):
+        if len(out) >= max_items:
+            break
+        url = (
+            f"https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
+            f"?app_id={app_id}&app_key={app_key}&results_per_page={results_per_page}"
+            f"&what={what}&where={where}&content-type=application/json"
         )
+        payload = _get_json(url)
+        results = payload.get("results", [])
+        if not results:
+            break
+
+        for job in results:
+            job_id = _safe_str(job.get("id"))
+            if job_id and job_id in seen_ids:
+                continue
+            if job_id:
+                seen_ids.add(job_id)
+            out.append(
+                _normalize_record(
+                    "adzuna",
+                    {
+                        "job_id": job.get("id"),
+                        "title": job.get("title"),
+                        "company": (job.get("company") or {}).get("display_name"),
+                        "location": (job.get("location") or {}).get("display_name"),
+                        "country": country.upper(),
+                        "work_type": "",
+                        "salary": _to_salary_text(job.get("salary_min"), job.get("salary_max")),
+                        "description": job.get("description"),
+                        "skills": [],
+                        "industry": (job.get("category") or {}).get("label"),
+                        "posting_date": job.get("created"),
+                        "portal": "Adzuna",
+                        "external_url": job.get("redirect_url"),
+                    },
+                )
+            )
+            if len(out) >= max_items:
+                break
     return out
 
 
@@ -341,28 +408,57 @@ def fetch_lever(max_items_per_site: int = 100) -> list[dict[str, Any]]:
 
 
 def fetch_configured_sources() -> list[dict[str, Any]]:
-    """
-    Fetches enabled external sources.
-    Default behavior is safe: disabled unless ENABLE_EXTERNAL_SOURCES=true.
-    """
-    if os.getenv("ENABLE_EXTERNAL_SOURCES", "").lower() not in {"1", "true", "yes"}:
-        return []
+    jobs, _ = fetch_configured_sources_with_stats()
+    return jobs
+
+
+def get_source_config() -> dict[str, Any]:
+    source_to_fetcher = {
+        "usajobs": fetch_usajobs,
+        "adzuna": fetch_adzuna,
+        "remotive": fetch_remotive,
+        "arbeitnow": fetch_arbeitnow,
+        "jooble": fetch_jooble,
+        "greenhouse": fetch_greenhouse,
+        "lever": fetch_lever,
+    }
+    enabled_sources = _list_env("EXTERNAL_SOURCES")
+    if not enabled_sources:
+        enabled_sources = ["adzuna", "jooble", "greenhouse", "lever", "remotive"]
+
+    return {
+        "enabled_sources": [s for s in enabled_sources if s in source_to_fetcher],
+        "india_only": _env_flag("INDIA_ONLY", default=True),
+        "include_remote": _env_flag("INCLUDE_REMOTE", default=True),
+        "source_to_fetcher": source_to_fetcher,
+    }
+
+
+def fetch_configured_sources_with_stats() -> tuple[list[dict[str, Any]], dict[str, int]]:
+    if not _env_flag("ENABLE_EXTERNAL_SOURCES", default=False):
+        return [], {}
+
+    cfg = get_source_config()
+    enabled_sources: list[str] = cfg["enabled_sources"]
+    india_only: bool = cfg["india_only"]
+    include_remote: bool = cfg["include_remote"]
+    source_to_fetcher: dict[str, Any] = cfg["source_to_fetcher"]
 
     combined: list[dict[str, Any]] = []
-    fetchers = [
-        fetch_usajobs,
-        fetch_adzuna,
-        fetch_remotive,
-        fetch_arbeitnow,
-        fetch_jooble,
-        fetch_greenhouse,
-        fetch_lever,
-    ]
-    for fetcher in fetchers:
+    counts: dict[str, int] = {}
+    for source_name in enabled_sources:
+        fetcher = source_to_fetcher.get(source_name)
+        if not fetcher:
+            continue
         try:
-            combined.extend(fetcher())
+            fetched = fetcher()
+            if india_only:
+                fetched = [job for job in fetched if _is_india_job(job, include_remote=include_remote)]
+            combined.extend(fetched)
+            counts[source_name] = len(fetched)
         except Exception as exc:
             # Keep indexing resilient if one source fails, but emit a warning for debugging.
             log.warning("External source fetch failed for %s: %s", fetcher.__name__, exc)
+            counts[source_name] = 0
             continue
-    return combined
+    return combined, counts

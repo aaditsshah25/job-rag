@@ -1,30 +1,31 @@
-# JobMatch AI — RAG Assignment
+# JobMatch AI - RAG Assignment
 
-AI-powered job matching using **Python (FastAPI) + Pinecone + OpenAI GPT-4o**.
-
----
+AI-powered job matching using FastAPI, Pinecone, and OpenAI models.
 
 ## Quick Start
 
-**Step 1 — Set up environment**
+1. Install dependencies and create `.env`:
 
 ```bash
-cd rag/
 pip install -r requirements.txt
 cp .env.example .env
-# Edit .env and add your OPENAI_API_KEY and PINECONE_API_KEY
 ```
 
-**Step 2 — Start the backend**
+2. Fill required keys in `.env`:
+- `OPENAI_API_KEY`
+- `PINECONE_API_KEY`
+- `JOBMATCH_API_KEY` (recommended)
+
+3. Start backend:
 
 ```bash
 uvicorn backend:app --reload --port 8000
 ```
 
-The first startup can index the 2,000 job listings into Pinecone if you enable `INDEX_ON_STARTUP=1`.
-For Railway and other production deploys, it is safer to leave startup indexing off and trigger `POST /index?force=true` once after deployment.
+4. Open frontend:
+- Open `frontend/index.html` in a browser.
 
-**Step 3 — Open the app**
+## Indexing Behavior
 
 Open `http://localhost:8000/` in your browser. The backend now serves the frontend directly.
 
@@ -32,77 +33,69 @@ Open `http://localhost:8000/` in your browser. The backend now serves the fronte
 
 ## How It Works
 
-```
-User fills form → chatInput prompt
-    ↓
-POST http://localhost:8000/webhook
-    ↓
-[OpenAI text-embedding-3-small] — embed user query
-    ↓
-[Pinecone] — retrieve top 20 semantically similar jobs
-    ↓
-[GPT-4o] — rank & explain top 5 matches, generate Markdown
-    ↓
-Frontend renders structured job cards
-```
+- On startup, backend attempts indexing if keys are configured.
+- If Pinecone index already has vectors, re-index is skipped.
+- `INDEX_MODE` controls ingestion strategy:
+  - `hybrid` (default): CSV + external sources
+  - `live_only`: external sources only
+  - `csv_only`: local dataset only
+- To force re-index:
 
----
-
-## File Structure
-
+```bash
+curl -X POST "http://localhost:8000/index?force=true" -H "X-Api-Key: <JOBMATCH_API_KEY>"
 ```
-rag/
-├── backend.py                            ← Python FastAPI backend (RAG pipeline)
-├── requirements.txt                      ← Python dependencies
-├── .env.example                          ← Environment variable template
-├── GENAI_RAG_Dataset - Sheet1.csv        ← 2,000 job listings dataset
-├── GenAI - RAG Assignment - Final.json   ← original n8n workflow (reference)
-├── README.md
-└── frontend/
-    ├── index.html
-    ├── app.js                            ← calls http://localhost:8000/webhook
-    ├── data.js
-    ├── style.css
-    └── cors-proxy.js                     ← (legacy, no longer needed)
-```
-
----
 
 ## API Endpoints
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Health check |
-| `POST` | `/webhook` | Main job-match endpoint (used by frontend) |
-| `POST` | `/index?force=true` | Re-index the CSV dataset into Pinecone |
+| `POST` | `/webhook` | Main job-match endpoint |
+| `POST` | `/debug/retrieval` | Returns compact retrieval candidates |
+| `POST` | `/index` | (Re)index dataset (`force=true` optional) |
+| `GET` | `/sources/status` | Configured sources + per-source counts from latest index run |
+| `POST` | `/parse-resume` | Parse PDF resume to structured profile |
+| `POST` | `/cover-letter` | Generate tailored cover letter |
+| `POST` | `/compose-recruiter-email` | Generate Gmail-ready recruiter email + tailored resume text |
+| `POST` | `/bookmark` | Save bookmark |
+| `GET` | `/bookmarks/{session_id}` | Get bookmarks |
+| `POST` | `/applications` | Create/update application status |
+| `GET` | `/applications/{session_id}` | List applications |
+| `PATCH` | `/applications/{application_id}` | Update application fields |
+| `POST` | `/feedback` | Store user feedback |
+| `POST` | `/send-results` | Email results via Resend |
+| `POST` | `/auth/google` | Exchange Google credential for JWT |
 
-### Multi-source enrichment
+All protected endpoints require `X-Api-Key` when `JOBMATCH_API_KEY` is set.
 
-The backend can enrich the index with external sources so the database is much richer.
+## External Source Enrichment
 
-1. Set `ENABLE_EXTERNAL_SOURCES=true` in `.env`
-2. Configure one or more provider credentials/tokens in `.env`
-3. Run `POST /index?force=true`
+To enrich indexing with external job sources:
 
-Reference source list and setup details: `SOURCES.md`
+1. Set `ENABLE_EXTERNAL_SOURCES=true` in `.env`.
+2. Add one or more provider keys/tokens in `.env`.
+3. Run `POST /index?force=true`.
 
-### Webhook request/response
+Recommended India-focused setup:
 
-```json
-// Request
-{ "chatInput": "I'm looking for...", "sessionId": "session_123" }
-
-// Response
-{ "output": "# Your Job Match Results\n## Summary\n..." }
+```env
+ENABLE_EXTERNAL_SOURCES=true
+INDEX_MODE=live_only
+EXTERNAL_SOURCES=adzuna,jooble,greenhouse,lever,remotive
+INDIA_ONLY=true
+INCLUDE_REMOTE=true
+ADZUNA_COUNTRY=in
+ADZUNA_WHERE=india
+JOOBLE_LOCATION=India
 ```
 
----
+Reference setup details: `SOURCES.md`.
 
 ## Troubleshooting
 
 | Issue | Fix |
 |---|---|
-| "RuntimeError: OPENAI_API_KEY is not set" | Add keys to `.env` file |
-| Empty results | Check Pinecone index — hit `POST /index?force=true` to re-index |
-| Port 8000 in use | Run `uvicorn backend:app --port 8001` and update `N8N_WEBHOOK_URL` in `app.js` |
-| First request slow | If you enabled `INDEX_ON_STARTUP=1`, wait for the indexing log line; otherwise run `POST /index?force=true` once |
+| `OPENAI_API_KEY is not set` | Add key to `.env` |
+| Empty matches | Force re-index with `POST /index?force=true` |
+| Frontend cannot reach backend | Check `frontend/config.js` base URL |
+| Port 8000 busy | Use another port and update frontend API base URL |

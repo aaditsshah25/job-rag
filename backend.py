@@ -19,6 +19,7 @@ import re
 import json
 import math
 import ast
+import asyncio
 import logging
 import hashlib
 import uuid
@@ -26,6 +27,7 @@ import io
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Optional
+from urllib.parse import urlencode
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
@@ -38,7 +40,7 @@ from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
 import aiosqlite
-from source_ingestion import fetch_configured_sources
+from source_ingestion import fetch_configured_sources_with_stats, get_source_config
 
 try:
     from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -60,6 +62,19 @@ try:
 except ImportError:
     _RESEND_AVAILABLE = False
 
+try:
+    import jwt as pyjwt
+    _PYJWT_AVAILABLE = True
+except ImportError:
+    _PYJWT_AVAILABLE = False
+
+try:
+    from google.oauth2 import id_token as google_id_token
+    from google.auth.transport import requests as google_requests
+    _GOOGLE_AUTH_AVAILABLE = True
+except ImportError:
+    _GOOGLE_AUTH_AVAILABLE = False
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -75,6 +90,7 @@ EMBED_MODEL       = "text-embedding-3-small"
 CHAT_MODEL        = os.getenv("OPENAI_CHAT_MODEL", "gpt-4o")
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
+INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
 CSV_PATH          = os.getenv(
     "CSV_PATH",
     os.path.join(os.path.dirname(__file__), "GENAI_RAG_Dataset - Sheet1.csv")
@@ -83,10 +99,22 @@ DB_PATH           = os.getenv("DB_PATH", "./data/jobmatch.db")
 JOBMATCH_API_KEY  = os.getenv("JOBMATCH_API_KEY", "")
 RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
+GOOGLE_CLIENT_ID  = os.getenv("GOOGLE_CLIENT_ID", "")
+JWT_SECRET        = os.getenv("JWT_SECRET", "")
+JWT_ALGORITHM     = "HS256"
+JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
 # ─── Lazy singletons ──────────────────────────────────
 _openai_client = None
 _pc = None
+_last_source_stats: dict[str, object] = {
+    "last_indexed_at": None,
+    "index_mode": None,
+    "external_sources_enabled": False,
+    "configured_sources": [],
+    "source_counts": {},
+    "external_total": 0,
+}
 
 def get_openai() -> OpenAI:
     global _openai_client
@@ -309,6 +337,25 @@ class SendResultsRequest(BaseModel):
     name: str
     results_markdown: str
 
+class GoogleAuthRequest(BaseModel):
+    credential: str
+
+class DebugRetrievalRequest(BaseModel):
+    profile: Optional[UserProfile] = None
+    chatInput: Optional[str] = None
+    topK: int = 12
+
+class ApplicationCreateRequest(BaseModel):
+    session_id: str
+    job_title: str
+    company: str
+    status: str = "saved"
+    notes: str = ""
+
+class ApplicationUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
 class TailorResumeRequest(BaseModel):
     resume_text: str
     job_title: str
@@ -321,6 +368,18 @@ class KeywordGapRequest(BaseModel):
     resume_text: str
     job_description: str
     job_skills: list[str] = []
+
+class RecruiterEmailComposeRequest(BaseModel):
+    profile: UserProfile
+    recruiter_email: str = ""
+    job_title: str
+    company: str
+    job_description: str = ""
+    job_location: str = ""
+    match_score: Optional[int] = None
+    job_skills: list[str] = []
+    resume_text: str
+    session_id: str = ""
 
 # ─── Profile query builder ────────────────────────────
 def build_query_from_profile(profile: UserProfile) -> str:
@@ -418,6 +477,41 @@ def _safe_json_loads(raw: str, default):
     except Exception:
         return default
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+def _create_access_token(email: str, name: str, picture: str) -> str:
+    if not _PYJWT_AVAILABLE:
+        raise HTTPException(status_code=503, detail="PyJWT is not installed on this server")
+    if not JWT_SECRET:
+        raise HTTPException(status_code=503, detail="JWT_SECRET is not configured on this server")
+    payload = {
+        "sub": email,
+        "name": name,
+        "picture": picture,
+        "exp": datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS),
+    }
+    return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def _verify_google_credential(credential: str) -> dict:
+    if not _GOOGLE_AUTH_AVAILABLE:
+        raise HTTPException(status_code=503, detail="google-auth is not installed on this server")
+    try:
+        audience = GOOGLE_CLIENT_ID or None
+        token_payload = google_id_token.verify_oauth2_token(
+            credential,
+            google_requests.Request(),
+            audience=audience,
+        )
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid Google credential")
+    if GOOGLE_CLIENT_ID and token_payload.get("aud") != GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=401, detail="Google credential audience mismatch")
+    return token_payload
+
 def clean_row(row) -> dict:
     profile = _parse_company_profile(_safe_str(row.get("Company Profile", "")))
     skills   = _parse_skills(_safe_str(row.get("skills", "")))
@@ -493,20 +587,55 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
     return [r.embedding for r in resp.data]
 
 def index_dataset(force: bool = False) -> int:
+    global _last_source_stats
     index = get_or_create_index()
     if not force:
         stats = index.describe_index_stats()
         if stats.total_vector_count > 0:
             log.info("Index already has %d vectors; skipping re-index.", stats.total_vector_count)
             return stats.total_vector_count
-    log.info("Loading dataset from %s ...", CSV_PATH)
-    df = pd.read_csv(CSV_PATH)
-    log.info("Loaded %d rows.", len(df))
-    jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
-    external_jobs = fetch_configured_sources()
-    if external_jobs:
-        log.info("Loaded %d external listings from configured sources.", len(external_jobs))
-        jobs.extend(external_jobs)
+
+    mode = INDEX_MODE if INDEX_MODE in {"csv_only", "live_only", "hybrid"} else "hybrid"
+    jobs: list[dict] = []
+
+    if mode in {"csv_only", "hybrid"}:
+        log.info("Loading dataset from %s ...", CSV_PATH)
+        df = pd.read_csv(CSV_PATH)
+        log.info("Loaded %d CSV rows.", len(df))
+        jobs.extend(clean_row(df.iloc[i]) for i in range(len(df)))
+
+    source_cfg = get_source_config()
+    source_counts: dict[str, int] = {}
+    external_total = 0
+
+    if mode in {"live_only", "hybrid"}:
+        external_jobs, source_counts = fetch_configured_sources_with_stats()
+        external_total = sum(source_counts.values())
+        if external_jobs:
+            log.info("Loaded %d external listings from configured sources.", len(external_jobs))
+            jobs.extend(external_jobs)
+        elif mode == "live_only":
+            raise RuntimeError(
+                "INDEX_MODE=live_only but no external listings were fetched. "
+                "Set ENABLE_EXTERNAL_SOURCES=true and configure at least one source."
+            )
+
+    if not jobs:
+        raise RuntimeError(
+            "No jobs available for indexing. Check INDEX_MODE, CSV_PATH, and external source config."
+        )
+
+    _last_source_stats = {
+        "last_indexed_at": datetime.utcnow().isoformat() + "Z",
+        "index_mode": mode,
+        "external_sources_enabled": _env_flag("ENABLE_EXTERNAL_SOURCES", default=False),
+        "configured_sources": source_cfg.get("enabled_sources", []),
+        "india_only": source_cfg.get("india_only", True),
+        "include_remote": source_cfg.get("include_remote", True),
+        "source_counts": source_counts,
+        "external_total": external_total,
+    }
+
     log.info("Total listings to index: %d", len(jobs))
     EMBED_BATCH = 96
     UPSERT_BATCH = 100
@@ -727,14 +856,80 @@ async def webhook(request: Request):
     return WebhookResponse(output=output)
 
 
+@app.post("/debug/retrieval", dependencies=[Depends(verify_api_key)])
+@limiter.limit("20/minute")
+async def debug_retrieval(request: Request, req: DebugRetrievalRequest):
+    if req.profile:
+        query = build_query_from_profile(req.profile)
+    elif req.chatInput and req.chatInput.strip():
+        query = req.chatInput.strip()
+    else:
+        raise HTTPException(status_code=400, detail="Either profile or chatInput is required")
+
+    top_k = max(1, min(int(req.topK or 12), 50))
+    candidates = search_jobs_cached(query, top_k=top_k)
+    compact = []
+    for c in candidates:
+        compact.append({
+            "title": c.get("title", ""),
+            "company": c.get("company", ""),
+            "score": c.get("score", 0),
+            "semantic_score": c.get("score", 0),
+            "lexical_score": 0,
+            "location": c.get("location", ""),
+            "country": c.get("country", ""),
+            "work_type": c.get("work_type", ""),
+            "salary": c.get("salary", ""),
+            "skills": c.get("skills", []),
+            "source": c.get("source", ""),
+            "external_url": c.get("external_url", ""),
+        })
+    return {
+        "query": query,
+        "top_k": top_k,
+        "count": len(compact),
+        "candidates": compact,
+    }
+
+
+@app.post("/auth/google", dependencies=[Depends(verify_api_key)])
+async def auth_google(req: GoogleAuthRequest):
+    token_payload = await asyncio.to_thread(_verify_google_credential, req.credential)
+    email = _safe_str(token_payload.get("email", "")).lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Google account email is missing")
+    name = _safe_str(token_payload.get("name", "")) or email.split("@")[0]
+    picture = _safe_str(token_payload.get("picture", ""))
+    access_token = _create_access_token(email, name, picture)
+    return {
+        "status": "ok",
+        "user": {"email": email, "name": name, "picture": picture},
+        "email_verified": bool(token_payload.get("email_verified", True)),
+        "access_token": access_token,
+        "token_type": "bearer",
+    }
+
+
 @app.post("/index")
 async def index_endpoint(force: bool = False, _: None = Depends(verify_api_key)):
     try:
         total = index_dataset(force=force)
-        return {"status": "ok", "total_vectors": total}
+        return {"status": "ok", "total_vectors": total, "source_stats": _last_source_stats}
     except Exception as e:
         log.exception("Indexing failed")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/sources/status")
+async def sources_status(_: None = Depends(verify_api_key)):
+    source_cfg = get_source_config()
+    return {
+        "external_sources_enabled": _env_flag("ENABLE_EXTERNAL_SOURCES", default=False),
+        "configured_sources": source_cfg.get("enabled_sources", []),
+        "india_only": source_cfg.get("india_only", True),
+        "include_remote": source_cfg.get("include_remote", True),
+        "last_index_stats": _last_source_stats,
+    }
 
 
 @app.post("/parse-resume", dependencies=[Depends(verify_api_key)])
@@ -824,6 +1019,101 @@ async def save_bookmark(req: BookmarkRequest):
         )
         await db.commit()
     return {"status": "saved"}
+
+
+@app.post("/applications", dependencies=[Depends(verify_api_key)])
+async def create_or_update_application(req: ApplicationCreateRequest):
+    allowed_status = {"saved", "applied", "oa", "interview", "offer", "rejected"}
+    status = (req.status or "saved").strip().lower()
+    if status not in allowed_status:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {', '.join(sorted(allowed_status))}")
+
+    now = datetime.utcnow().isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT id, applied_at FROM applications
+               WHERE session_id = ? AND job_title = ? AND company = ?
+               ORDER BY id DESC LIMIT 1""",
+            (req.session_id, req.job_title, req.company),
+        ) as cursor:
+            existing = await cursor.fetchone()
+
+        if existing:
+            applied_at = existing["applied_at"]
+            if status == "applied" and not applied_at:
+                applied_at = now
+            await db.execute(
+                """UPDATE applications
+                   SET status = ?, notes = ?, applied_at = ?
+                   WHERE id = ?""",
+                (status, req.notes or "", applied_at, existing["id"]),
+            )
+            application_id = int(existing["id"])
+            result_status = "updated"
+        else:
+            applied_at = now if status == "applied" else None
+            await db.execute(
+                """INSERT INTO applications (session_id, job_title, company, status, notes, applied_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (req.session_id, req.job_title, req.company, status, req.notes or "", applied_at, now),
+            )
+            async with db.execute("SELECT last_insert_rowid()") as cursor:
+                row = await cursor.fetchone()
+            application_id = int(row[0]) if row else None
+            result_status = "saved"
+        await db.commit()
+
+    return {"status": result_status, "application_id": application_id}
+
+
+@app.get("/applications/{session_id}", dependencies=[Depends(verify_api_key)])
+async def get_applications(session_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """SELECT * FROM applications
+               WHERE session_id = ?
+               ORDER BY datetime(created_at) DESC""",
+            (session_id,),
+        ) as cursor:
+            rows = await cursor.fetchall()
+    return {"applications": [dict(row) for row in rows]}
+
+
+@app.patch("/applications/{application_id}", dependencies=[Depends(verify_api_key)])
+async def update_application(application_id: int, req: ApplicationUpdateRequest):
+    if req.status is None and req.notes is None:
+        raise HTTPException(status_code=400, detail="Provide at least one field to update")
+
+    allowed_status = {"saved", "applied", "oa", "interview", "offer", "rejected"}
+    updates = []
+    params = []
+
+    if req.status is not None:
+        status = req.status.strip().lower()
+        if status not in allowed_status:
+            raise HTTPException(status_code=400, detail=f"Invalid status. Allowed: {', '.join(sorted(allowed_status))}")
+        updates.append("status = ?")
+        params.append(status)
+        if status == "applied":
+            updates.append("applied_at = COALESCE(applied_at, ?)")
+            params.append(datetime.utcnow().isoformat())
+
+    if req.notes is not None:
+        updates.append("notes = ?")
+        params.append(req.notes)
+
+    params.append(application_id)
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            f"UPDATE applications SET {', '.join(updates)} WHERE id = ?",
+            tuple(params),
+        )
+        await db.commit()
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Application not found")
+    return {"status": "updated"}
 
 
 @app.get("/bookmarks/{session_id}", dependencies=[Depends(verify_api_key)])
@@ -1105,6 +1395,102 @@ RESUME TEXT:
             "nice_to_have": [],
             "category_breakdown": {"technical_skills": 0, "soft_skills": 0, "domain_knowledge": 0},
         }
+
+
+@app.post("/compose-recruiter-email", dependencies=[Depends(verify_api_key)])
+async def compose_recruiter_email(req: RecruiterEmailComposeRequest):
+    profile = req.profile
+    skills_str = ", ".join(req.job_skills) if req.job_skills else "not specified"
+    profile_skills_str = ", ".join(profile.skills) if profile.skills else "not specified"
+
+    recruiter_email = (req.recruiter_email or "").strip()
+    if not recruiter_email:
+        email_match = re.search(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b", req.job_description or "")
+        recruiter_email = email_match.group(0) if email_match else ""
+
+    subject = f"Application for {req.job_title} - {profile.name or 'Candidate'}"
+    body = (
+        f"Hi Hiring Team at {req.company},\n\n"
+        f"I am interested in the {req.job_title} role and would like to be considered. "
+        f"My background aligns with the role requirements and I have attached a tailored resume.\n\n"
+        f"Thank you for your time. I would value the opportunity to discuss how I can contribute.\n\n"
+        f"Best regards,\n{profile.name or 'Candidate'}"
+    )
+    tailored_resume_text = (req.resume_text or "").strip()
+
+    system_prompt = """You are an expert recruiting communications assistant.
+Return ONLY valid JSON with this exact schema:
+{
+  "subject": "<email subject line>",
+  "body": "<plain-text outreach email body with a greeting and clear call-to-action>",
+  "tailored_resume_text": "<plain-text tailored resume draft based strictly on provided resume content>"
+}
+
+Rules:
+- Keep the email body concise and professional (120-220 words).
+- Personalize for the role and company.
+- Do not invent experience not present in the resume text.
+- Tailored resume text should stay truthful and use clear section headings: Summary, Skills, Experience, Education.
+- If source resume lacks a section, omit it gracefully (do not fabricate)."""
+
+    user_prompt = f"""CANDIDATE PROFILE
+Name: {profile.name or "Candidate"}
+Email: {profile.email or "not provided"}
+Desired Role: {profile.desiredRole or "not provided"}
+Experience Years: {profile.experience}
+Skills: {profile_skills_str}
+Education: {profile.education or "not provided"}
+Industry: {profile.industry or "not provided"}
+Location: {profile.location or "not provided"}
+
+TARGET JOB
+Job Title: {req.job_title}
+Company: {req.company}
+Location: {req.job_location or "not specified"}
+Match Score: {req.match_score if req.match_score is not None else "not provided"}
+Required Skills: {skills_str}
+Job Description:
+{(req.job_description or "")[:1600]}
+
+CANDIDATE RESUME TEXT
+{(req.resume_text or "")[:4500]}
+"""
+
+    try:
+        response = get_openai().chat.completions.create(
+            model=CHAT_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0.35,
+            max_tokens=2200,
+            response_format={"type": "json_object"},
+        )
+        parsed = json.loads(response.choices[0].message.content)
+        subject = _safe_str(parsed.get("subject", subject)) or subject
+        body = _safe_str(parsed.get("body", body)) or body
+        tailored_resume_text = _safe_str(parsed.get("tailored_resume_text", tailored_resume_text)) or tailored_resume_text
+    except Exception:
+        log.exception("Recruiter email composition failed, using fallback")
+
+    safe_title = re.sub(r"[^A-Za-z0-9]+", "_", req.job_title or "Role").strip("_") or "Role"
+    safe_company = re.sub(r"[^A-Za-z0-9]+", "_", req.company or "Company").strip("_") or "Company"
+    tailored_resume_filename = f"Tailored_Resume_{safe_title}_{safe_company}.txt"
+
+    gmail_params = {"view": "cm", "fs": "1", "su": subject, "body": body}
+    if recruiter_email:
+        gmail_params["to"] = recruiter_email
+    gmail_url = "https://mail.google.com/mail/?" + urlencode(gmail_params)
+
+    return {
+        "recruiter_email": recruiter_email,
+        "subject": subject,
+        "body": body,
+        "tailored_resume_text": tailored_resume_text,
+        "tailored_resume_filename": tailored_resume_filename,
+        "gmail_url": gmail_url,
+    }
 
 
 @app.get("/resume-enhancements/{session_id}", dependencies=[Depends(verify_api_key)])

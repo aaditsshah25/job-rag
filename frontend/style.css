@@ -1960,6 +1960,27 @@ input[type="range"]::-moz-range-thumb {
   border-color: var(--accent);
 }
 
+.card-email-recruiter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1.5px solid #0d6d66;
+  background: transparent;
+  color: #0d6d66;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  margin-left: 6px;
+}
+
+.card-email-recruiter-btn:hover {
+  background: #0d6d66;
+  color: #fff;
+}
+
 /* ═══════════════════════════════════════════════════════
    MODAL
    ═══════════════════════════════════════════════════════ */
@@ -2078,6 +2099,7 @@ input[type="range"]::-moz-range-thumb {
   .card-copy-btn,
   .card-bookmark-btn,
   .card-cover-letter-btn,
+  .card-email-recruiter-btn,
   .results-header button,
   #empty-state,
   #loading-state,
