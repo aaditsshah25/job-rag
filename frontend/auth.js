@@ -87,19 +87,20 @@ const AUTH = {
   },
 
   ensureGSIInitialized() {
-    if (this._gsiInitialized) return;
     if (!window.google || !google.accounts || !google.accounts.id) return;
 
-    google.accounts.id.initialize({
-      client_id: CONFIG.GOOGLE_CLIENT_ID,
-      callback: this.handleGoogleCredential.bind(this),
-      auto_select: false,
-      cancel_on_tap_outside: false,
-    });
+    if (!this._gsiInitialized) {
+      google.accounts.id.initialize({
+        client_id: CONFIG.GOOGLE_CLIENT_ID,
+        callback: this.handleGoogleCredential.bind(this),
+        auto_select: false,
+        cancel_on_tap_outside: false,
+      });
+      this._gsiInitialized = true;
+    }
 
     const btnHost = document.getElementById('google-signin-btn');
-    if (btnHost) {
-      btnHost.innerHTML = '';
+    if (btnHost && !btnHost.hasChildNodes()) {
       google.accounts.id.renderButton(btnHost, {
         theme: 'outline',
         size: 'large',
@@ -109,8 +110,6 @@ const AUTH = {
         logo_alignment: 'left',
       });
     }
-
-    this._gsiInitialized = true;
   },
 
   async handleGoogleCredential(response) {
