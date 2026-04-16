@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend — syntax & import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Syntax check
+        run: python -m py_compile backend.py && echo "backend.py OK"
+
+      - name: Import check (stub env vars)
+        env:
+          OPENAI_API_KEY: stub
+          PINECONE_API_KEY: stub
+          PINECONE_INDEX: stub
+          JOBMATCH_API_KEY: stub
+        run: python -c "import backend; print('imports OK')"
+
+  frontend-react:
+    name: Frontend React — build check
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-react
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend-react/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        env:
+          VITE_API_BASE_URL: https://job-rag-production.up.railway.app
+        run: npm run build
+
+      - name: Verify dist output
+        run: test -f dist/index.html && echo "dist/index.html OK"

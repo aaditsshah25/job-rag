@@ -1,5 +1,7 @@
 # Environment / secrets
 .env
+.env.local
+.env.*.local
 
 # Python
 __pycache__/
@@ -7,14 +9,26 @@ __pycache__/
 *.pyo
 .Python
 *.egg-info/
-dist/
-build/
 .venv/
 venv/
+
+# Node / build artifacts (root-level only, not frontend-react/dist)
+node_modules/
+/dist/
+/build/
+
+# React build output — intentionally excluded from git (Vercel builds it)
+frontend-react/dist/
+frontend-react/node_modules/
 
 # Database
 data/
 *.db
+
+# Logs
+uvicorn.out
+uvicorn.err
+*.log
 
 # OS
 .DS_Store
