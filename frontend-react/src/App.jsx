@@ -87,7 +87,7 @@ const STEPS = [
   },
 ];
 
-const GOOGLE_SSO_PATH = '/app#googleSignInButton';
+const GOOGLE_SSO_PATH = '/#googleSignInButton';
 
 function jumpTo(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -117,14 +117,8 @@ export default function App() {
               </button>
             ))}
             <a
-              href="/app"
-              className="ml-3 rounded-lg bg-teal px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-teal-hover"
-            >
-              Get started
-            </a>
-            <a
               href={GOOGLE_SSO_PATH}
-              className="ml-2 rounded-lg border border-border-mid bg-cream px-4 py-1.5 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
+              className="ml-3 rounded-lg border border-border-mid bg-cream px-4 py-1.5 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
             >
               Sign in with Google
             </a>
@@ -146,9 +140,6 @@ export default function App() {
                 {l.label}
               </button>
             ))}
-            <a href="/app" className="mt-2 block rounded-lg bg-teal px-4 py-2 text-center text-sm font-semibold text-white">
-              Get started
-            </a>
             <a
               href={GOOGLE_SSO_PATH}
               className="mt-2 block rounded-lg border border-border-mid bg-cream px-4 py-2 text-center text-sm font-semibold text-text-base"
@@ -175,23 +166,11 @@ export default function App() {
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <a
-              href="/app"
-              className="rounded-lg bg-teal px-6 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
-            >
-              Get started free
-            </a>
-            <a
               href={GOOGLE_SSO_PATH}
-              className="rounded-lg border border-border-mid bg-cream px-6 py-3 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
+              className="rounded-lg bg-teal px-6 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
             >
               Sign in with Google
             </a>
-            <button
-              onClick={() => jumpTo('how-it-works')}
-              className="rounded-lg border border-border-mid bg-cream px-6 py-3 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
-            >
-              See how it works
-            </button>
           </div>
         </div>
 
@@ -260,14 +239,8 @@ export default function App() {
             <h2 className="mb-3 text-2xl font-extrabold text-text-base">Ready to find your next role?</h2>
             <p className="mb-7 text-text-sub">Your resume is all you need to get started.</p>
             <a
-              href="/app"
-              className="inline-block rounded-lg bg-teal px-7 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
-            >
-              Get started free
-            </a>
-            <a
               href={GOOGLE_SSO_PATH}
-              className="ml-3 inline-block rounded-lg border border-border-mid bg-cream px-7 py-3 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
+              className="inline-block rounded-lg bg-teal px-7 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
             >
               Sign in with Google
             </a>

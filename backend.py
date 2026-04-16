@@ -1151,6 +1151,16 @@ if os.path.isdir(REACT_FRONTEND_DIR):
 else:
     log.warning("React frontend not mounted because directory was not found: %s", REACT_FRONTEND_DIR)
 
+
+@app.get("/app")
+async def app_compat_redirect():
+    return RedirectResponse(url="/")
+
+
+@app.get("/app/")
+async def app_compat_redirect_slash():
+    return RedirectResponse(url="/")
+
 if os.path.isdir(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 else:
