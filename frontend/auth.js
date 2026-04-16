@@ -62,13 +62,10 @@ const AUTH = {
   },
 
   showMarketing() {
-    document.getElementById('marketing-shell')?.classList.remove('hidden');
-    document.getElementById('app-shell')?.classList.add('hidden');
-    document.getElementById('auth-gate')?.classList.add('hidden');
+    this.showAuthGate();
   },
 
   showApp() {
-    document.getElementById('marketing-shell')?.classList.add('hidden');
     document.getElementById('app-shell')?.classList.remove('hidden');
     document.getElementById('auth-gate')?.classList.add('hidden');
   },
