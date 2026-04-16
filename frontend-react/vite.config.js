@@ -8,7 +8,7 @@ function copyHtmlApp() {
   return {
     name: 'copy-html-app',
     closeBundle() {
-      const src = resolve(__dirname, '../frontend');
+      const src = resolve(__dirname, '../Aadit_Ananya_RAG/rag/frontend');
       const dest = resolve(__dirname, 'dist/app');
       copyDir(src, dest);
     },
