@@ -196,6 +196,28 @@ async def init_db():
                 created_at TEXT
             )
         """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS resume_enhancements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                overall_score INTEGER,
+                suggestions_json TEXT,
+                ats_tips_json TEXT,
+                score_breakdown_json TEXT,
+                created_at TEXT
+            )
+        """)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS resume_tailoring (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                job_title TEXT,
+                company TEXT,
+                tailored_score INTEGER,
+                analysis_json TEXT,
+                created_at TEXT
+            )
+        """)
         await db.commit()
 
 # ─── Lifespan ─────────────────────────────────────────
@@ -282,6 +304,19 @@ class SendResultsRequest(BaseModel):
     email: str
     name: str
     results_markdown: str
+
+class TailorResumeRequest(BaseModel):
+    resume_text: str
+    job_title: str
+    company: str
+    job_description: str = ""
+    job_skills: list[str] = []
+    session_id: str = ""
+
+class KeywordGapRequest(BaseModel):
+    resume_text: str
+    job_description: str
+    job_skills: list[str] = []
 
 # ─── Profile query builder ────────────────────────────
 def build_query_from_profile(profile: UserProfile) -> str:
@@ -743,6 +778,7 @@ Resume text:
     except Exception:
         parsed = {}
 
+    parsed["raw_text"] = text[:4000]
     return parsed
 
 
@@ -840,3 +876,262 @@ async def send_results(req: SendResultsRequest):
     except Exception as e:
         log.exception("Email send failed")
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
+
+
+@app.post("/enhance-resume", dependencies=[Depends(verify_api_key)])
+async def enhance_resume(request: Request, file: UploadFile = File(...)):
+    filename = (file.filename or "").lower()
+    if not filename.endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted")
+    if not _PDFPLUMBER_AVAILABLE:
+        raise HTTPException(status_code=503, detail="pdfplumber is not installed on this server")
+    contents = await file.read()
+    session_id = request.headers.get("X-Session-Id", "")
+    text = ""
+    try:
+        with pdfplumber.open(io.BytesIO(contents)) as pdf:
+            for page in pdf.pages:
+                text += (page.extract_text() or "") + "\n"
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not parse PDF: {e}")
+
+    if not text.strip():
+        raise HTTPException(status_code=422, detail="No text could be extracted from PDF")
+
+    system_prompt = """You are an expert resume coach and ATS (Applicant Tracking System) optimization specialist with 15+ years reviewing resumes across technology, finance, and consulting.
+
+Given resume text, produce a JSON audit report. Be specific — quote actual phrases from the resume. Do NOT rewrite the entire resume; produce targeted, actionable micro-improvements only.
+
+Return ONLY valid JSON in this exact schema:
+{
+  "overall_score": <integer 0-100>,
+  "score_breakdown": {
+    "action_verbs": <0-100>,
+    "quantification": <0-100>,
+    "completeness": <0-100>,
+    "ats_compatibility": <0-100>,
+    "formatting": <0-100>
+  },
+  "suggestions": [
+    {
+      "category": "<Action Verbs|Quantification|ATS|Formatting|Missing Section|Weak Phrases>",
+      "priority": "<high|medium|low>",
+      "issue": "<specific problem, quote from resume if possible>",
+      "fix": "<exactly what to do>",
+      "example": "<before → after example>"
+    }
+  ],
+  "ats_tips": ["<tip1>", "<tip2>"],
+  "industry_tips": ["<industry-specific tip based on detected domain>"]
+}
+
+SCORING: overall_score < 50 = major issues, 50-70 = solid but improvable, 70-85 = good, 85+ = excellent.
+Produce 5-8 suggestions ordered by priority (high first). Detect the likely industry from the resume and tailor industry_tips accordingly."""
+
+    user_prompt = f"Analyze this resume:\n\n{text[:4000]}"
+
+    response = get_openai().chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+        max_tokens=2000,
+        response_format={"type": "json_object"},
+    )
+
+    try:
+        result = json.loads(response.choices[0].message.content)
+    except Exception:
+        result = {"overall_score": 0, "suggestions": [], "ats_tips": [], "industry_tips": [], "score_breakdown": {}}
+
+    if session_id:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO resume_enhancements (session_id, overall_score, suggestions_json, ats_tips_json, score_breakdown_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    session_id,
+                    result.get("overall_score", 0),
+                    json.dumps(result.get("suggestions", [])),
+                    json.dumps(result.get("ats_tips", [])),
+                    json.dumps(result.get("score_breakdown", {})),
+                    datetime.utcnow().isoformat(),
+                )
+            )
+            await db.commit()
+
+    result["raw_text"] = text[:4000]
+    return result
+
+
+@app.post("/tailor-resume", dependencies=[Depends(verify_api_key)])
+async def tailor_resume(req: TailorResumeRequest):
+    system_prompt = """You are a senior technical recruiter and resume optimization expert. Given a candidate's resume text AND a specific job description, produce a JSON report showing exactly how to tailor the resume for this particular job.
+
+Be specific. Quote actual sentences from the resume when suggesting rewrites. Map skills in the JD directly to evidence in the resume. The score must reflect honest gap analysis.
+
+Return ONLY valid JSON in this exact schema:
+{
+  "tailored_score": <integer 0-100>,
+  "score_rationale": "<2-sentence explanation of the score>",
+  "skills_to_add": ["<skill missing from resume but required by JD>"],
+  "skills_to_emphasize": ["<skill present in resume but not prominently featured, important for JD>"],
+  "bullet_rewrites": [
+    {
+      "original": "<exact quote from resume>",
+      "rewritten": "<improved version aligned to JD>",
+      "reason": "<why this change improves JD alignment>"
+    }
+  ],
+  "priority_changes": [
+    {
+      "rank": <1-N>,
+      "change": "<specific actionable change>",
+      "impact": "<high|medium|low>",
+      "section": "<Skills|Experience|Summary|Education>"
+    }
+  ],
+  "keyword_analysis": {
+    "present": ["<keywords from JD that appear in resume>"],
+    "missing": ["<required JD keywords not in resume>"],
+    "nice_to_have": ["<preferred JD keywords not in resume>"]
+  }
+}
+
+RULES: Do NOT invent experience the candidate does not have. skills_to_add should be honest skill gaps. Produce 3-5 bullet_rewrites for the most impactful bullets. priority_changes ordered 1 = most impactful."""
+
+    skills_str = ", ".join(req.job_skills) if req.job_skills else "not specified"
+    user_prompt = f"""JOB TITLE: {req.job_title}
+COMPANY: {req.company}
+JOB DESCRIPTION: {req.job_description[:1000]}
+JOB REQUIRED SKILLS: {skills_str}
+
+CANDIDATE RESUME:
+{req.resume_text[:4000]}"""
+
+    response = get_openai().chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.3,
+        max_tokens=2000,
+        response_format={"type": "json_object"},
+    )
+
+    try:
+        result = json.loads(response.choices[0].message.content)
+    except Exception:
+        result = {
+            "tailored_score": 0,
+            "score_rationale": "Analysis could not be completed.",
+            "skills_to_add": [],
+            "skills_to_emphasize": [],
+            "bullet_rewrites": [],
+            "priority_changes": [],
+            "keyword_analysis": {"present": [], "missing": [], "nice_to_have": []},
+        }
+
+    if req.session_id:
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute(
+                """INSERT INTO resume_tailoring (session_id, job_title, company, tailored_score, analysis_json, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    req.session_id,
+                    req.job_title,
+                    req.company,
+                    result.get("tailored_score", 0),
+                    json.dumps(result),
+                    datetime.utcnow().isoformat(),
+                )
+            )
+            await db.commit()
+
+    return result
+
+
+@app.post("/keyword-gap", dependencies=[Depends(verify_api_key)])
+async def keyword_gap(req: KeywordGapRequest):
+    system_prompt = """You are a resume keyword analysis system. Given resume text and a job description, extract and categorize keywords. Return ONLY valid JSON.
+
+{
+  "match_percentage": <0-100>,
+  "present_keywords": ["<keywords from JD found in resume>"],
+  "missing_keywords": ["<required JD keywords not in resume>"],
+  "nice_to_have": ["<preferred/bonus JD keywords not in resume>"],
+  "category_breakdown": {
+    "technical_skills": <0-100>,
+    "soft_skills": <0-100>,
+    "domain_knowledge": <0-100>
+  }
+}
+
+Be precise. Only list keywords that are genuinely meaningful job requirements (not filler words). Maximum 10 items per list."""
+
+    skills_str = ", ".join(req.job_skills) if req.job_skills else ""
+    user_prompt = f"""JOB DESCRIPTION: {req.job_description[:1000]}
+JOB SKILLS: {skills_str}
+
+RESUME TEXT:
+{req.resume_text[:4000]}"""
+
+    response = get_openai().chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.1,
+        max_tokens=800,
+        response_format={"type": "json_object"},
+    )
+
+    try:
+        return json.loads(response.choices[0].message.content)
+    except Exception:
+        return {
+            "match_percentage": 0,
+            "present_keywords": [],
+            "missing_keywords": [],
+            "nice_to_have": [],
+            "category_breakdown": {"technical_skills": 0, "soft_skills": 0, "domain_knowledge": 0},
+        }
+
+
+@app.get("/resume-enhancements/{session_id}", dependencies=[Depends(verify_api_key)])
+async def get_resume_enhancements(session_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM resume_enhancements WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+            (session_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+    if not row:
+        return {"enhancement": None}
+    item = dict(row)
+    item["suggestions"] = _safe_json_loads(item.get("suggestions_json", "[]") or "[]", [])
+    item["ats_tips"] = _safe_json_loads(item.get("ats_tips_json", "[]") or "[]", [])
+    item["score_breakdown"] = _safe_json_loads(item.get("score_breakdown_json", "{}") or "{}", {})
+    return {"enhancement": item}
+
+
+@app.get("/resume-tailoring/{session_id}", dependencies=[Depends(verify_api_key)])
+async def get_resume_tailoring(session_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM resume_tailoring WHERE session_id = ? ORDER BY created_at DESC",
+            (session_id,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["analysis"] = _safe_json_loads(item.get("analysis_json", "{}") or "{}", {})
+        result.append(item)
+    return {"tailoring": result}

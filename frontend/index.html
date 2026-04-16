@@ -236,6 +236,15 @@
         <span id="resumeStatus" class="resume-status"></span>
       </div>
 
+      <!-- Resume Enhancement Panel (revealed after upload) -->
+      <div id="resume-enhance-panel" class="resume-enhance-panel hidden">
+        <button type="button" id="enhanceResumeBtn" class="btn-enhance-resume">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+          Analyze &amp; Enhance Resume
+        </button>
+        <span id="enhanceStatus" class="enhance-status"></span>
+      </div>
+
       <form id="profile-form" autocomplete="off">
 
         <!-- Row 1: Name + Email -->
@@ -519,6 +528,38 @@
       <div class="modal-footer">
         <button class="btn-secondary" id="cancelApplicationStatusBtn">Cancel</button>
         <button class="btn-primary" id="saveApplicationStatusBtn">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Resume Enhancement Modal -->
+  <div id="resumeEnhanceModal" class="modal-overlay hidden">
+    <div class="modal-box modal-box-wide">
+      <div class="modal-header">
+        <h3>Resume Enhancement Report</h3>
+        <button class="modal-close" id="closeEnhanceModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="resumeEnhanceContent"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="closeEnhanceModalBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tailor Resume Modal -->
+  <div id="tailorResumeModal" class="modal-overlay hidden">
+    <div class="modal-box modal-box-wide">
+      <div class="modal-header">
+        <h3 id="tailorModalTitle">Tailoring Resume...</h3>
+        <button class="modal-close" id="closeTailorModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="tailorResumeContent"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="closeTailorModalBtn">Close</button>
       </div>
     </div>
   </div>

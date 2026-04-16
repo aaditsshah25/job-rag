@@ -12,6 +12,10 @@ if (!currentSessionId) {
   localStorage.setItem(SESSION_ID_KEY, currentSessionId);
 }
 
+// ─── RESUME STATE ─────────────────────────────────────
+let lastResumeText = '';
+let lastResumeFile = null;
+
 // ─── BOOKMARKS (localStorage) ─────────────────────────
 let bookmarkedJobsData = [];
 try {
@@ -418,6 +422,11 @@ async function handleResumeUpload(file) {
 
     resumeStatus.textContent = 'Resume parsed! Fields auto-filled.';
     resumeStatus.className = 'resume-status success';
+    // Store file for enhancement feature
+    lastResumeFile = file;
+    if (data.raw_text) lastResumeText = data.raw_text;
+    const enhancePanel = document.getElementById('resume-enhance-panel');
+    if (enhancePanel) enhancePanel.classList.remove('hidden');
   } catch (err) {
     resumeStatus.textContent = 'Parse failed: ' + err.message;
     resumeStatus.className = 'resume-status error';
@@ -986,6 +995,17 @@ function renderJobCard(job, rank) {
     Status: ${esc(appStatus)}
   </button>`;
 
+  // Tailor Resume button (only shown if resume was uploaded)
+  if (lastResumeText) {
+    html += `<button class="card-tailor-btn" title="Tailor your resume for this job"
+      data-tailor-title="${esc(jobTitle)}"
+      data-tailor-company="${esc(company)}"
+      data-tailor-desc="${esc(jobDescription.trim().slice(0, 500))}"
+      data-tailor-skills="${esc(reasons.slice(0, 8).join('|'))}">
+      Tailor Resume
+    </button>`;
+  }
+
   // Bookmark button
   html += `<button class="card-bookmark-btn ${bookmarkedJobs.has(bookmarkKey) ? 'bookmarked' : ''}" title="Bookmark this job"
     data-bookmark-title="${esc(jobTitle)}"
@@ -1097,6 +1117,7 @@ function wireCardInteractions() {
       if (e.target.closest('.card-bookmark-btn')) return;
       if (e.target.closest('.card-cover-letter-btn')) return;
       if (e.target.closest('.card-apply-btn')) return;
+      if (e.target.closest('.card-tailor-btn')) return;
       const card = header.closest('.job-card');
       if (card) card.classList.toggle('collapsed');
     });
@@ -1167,6 +1188,19 @@ function wireCardInteractions() {
       openApplicationStatusModal(title, company);
     });
   });
+
+  // Tailor Resume buttons
+  document.querySelectorAll('.card-tailor-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const title = btn.getAttribute('data-tailor-title') || '';
+      const company = btn.getAttribute('data-tailor-company') || '';
+      const desc = btn.getAttribute('data-tailor-desc') || '';
+      const skillsRaw = btn.getAttribute('data-tailor-skills') || '';
+      const skills = skillsRaw ? skillsRaw.split('|').filter(Boolean) : [];
+      await tailorResume(title, company, desc, skills);
+    });
+  });
 }
 
 
@@ -1227,4 +1261,274 @@ function showState(state) {
 function showError(msg) {
   errorMessage.textContent = msg;
   showState('error');
+}
+
+
+// ─── RESUME ENHANCEMENT ─────────────────────────────
+const enhanceResumeBtn = document.getElementById('enhanceResumeBtn');
+const resumeEnhanceModal = document.getElementById('resumeEnhanceModal');
+
+if (enhanceResumeBtn) {
+  enhanceResumeBtn.addEventListener('click', async () => {
+    if (!lastResumeFile) return;
+    await callEnhanceResume(lastResumeFile);
+  });
+}
+
+document.getElementById('closeEnhanceModal')?.addEventListener('click', () => {
+  resumeEnhanceModal?.classList.add('hidden');
+});
+document.getElementById('closeEnhanceModalBtn')?.addEventListener('click', () => {
+  resumeEnhanceModal?.classList.add('hidden');
+});
+resumeEnhanceModal?.addEventListener('click', (e) => {
+  if (e.target === resumeEnhanceModal) resumeEnhanceModal.classList.add('hidden');
+});
+
+async function callEnhanceResume(file) {
+  const statusEl = document.getElementById('enhanceStatus');
+  if (statusEl) { statusEl.textContent = 'Analyzing resume...'; statusEl.className = 'enhance-status loading'; }
+
+  const formData = new FormData();
+  formData.append('file', file);
+  const headers = AUTH.headers({ 'Content-Type': undefined });
+  delete headers['Content-Type'];
+  headers['X-Session-Id'] = currentSessionId;
+
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/enhance-resume', {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Server error ${res.status}`);
+    }
+    const data = await res.json();
+    if (data.raw_text) lastResumeText = data.raw_text;
+
+    if (statusEl) { statusEl.textContent = ''; statusEl.className = 'enhance-status'; }
+
+    const contentEl = document.getElementById('resumeEnhanceContent');
+    if (contentEl) contentEl.innerHTML = renderEnhancementReport(data);
+    resumeEnhanceModal?.classList.remove('hidden');
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = 'Enhancement failed: ' + err.message; statusEl.className = 'enhance-status error'; }
+  }
+}
+
+function renderEnhancementReport(data) {
+  const score = data.overall_score || 0;
+  const scoreColor = score >= 85 ? 'var(--success)' : score >= 70 ? 'var(--accent)' : score >= 50 ? 'var(--warning)' : 'var(--danger)';
+  const breakdown = data.score_breakdown || {};
+  const suggestions = data.suggestions || [];
+  const atsTips = data.ats_tips || [];
+  const industryTips = data.industry_tips || [];
+
+  let html = `<div class="enhance-report">`;
+
+  // Overall score
+  html += `<div class="enhance-score-section">
+    <div class="enhance-score-ring" style="--score-color:${scoreColor}">
+      <span class="enhance-score-num">${score}</span>
+      <span class="enhance-score-label">/100</span>
+    </div>
+    <div class="enhance-score-meta">
+      <h3>Resume Score</h3>
+      <p>${score >= 85 ? 'Excellent — minimal changes needed' : score >= 70 ? 'Good — minor polish needed' : score >= 50 ? 'Solid but improvable' : 'Major improvements needed'}</p>
+    </div>
+  </div>`;
+
+  // Score breakdown
+  if (Object.keys(breakdown).length > 0) {
+    html += `<div class="enhance-breakdown">`;
+    const labels = { action_verbs: 'Action Verbs', quantification: 'Quantification', completeness: 'Completeness', ats_compatibility: 'ATS Compatibility', formatting: 'Formatting' };
+    for (const [key, val] of Object.entries(breakdown)) {
+      const pct = Math.min(100, Math.max(0, val));
+      const barColor = pct >= 70 ? 'var(--success)' : pct >= 50 ? 'var(--warning)' : 'var(--danger)';
+      html += `<div class="score-bar-item">
+        <span class="score-bar-label">${esc(labels[key] || key)}</span>
+        <div class="score-bar-track"><div class="score-bar-fill-enhance" style="width:${pct}%;background:${barColor}"></div></div>
+        <span class="score-bar-pct">${pct}</span>
+      </div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Suggestions
+  if (suggestions.length > 0) {
+    html += `<div class="enhance-suggestions"><h4>Improvement Suggestions</h4>`;
+    suggestions.forEach(s => {
+      const priorityClass = s.priority === 'high' ? 'priority-high' : s.priority === 'medium' ? 'priority-med' : 'priority-low';
+      html += `<div class="suggestion-item ${priorityClass}">
+        <div class="suggestion-header">
+          <span class="suggestion-category">${esc(s.category || '')}</span>
+          <span class="suggestion-priority">${esc(s.priority || '')}</span>
+        </div>
+        <p class="suggestion-issue"><strong>Issue:</strong> ${esc(s.issue || '')}</p>
+        <p class="suggestion-fix"><strong>Fix:</strong> ${esc(s.fix || '')}</p>
+        ${s.example ? `<p class="suggestion-example">${esc(s.example)}</p>` : ''}
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // ATS Tips
+  if (atsTips.length > 0) {
+    html += `<div class="enhance-tips"><h4>ATS Optimization Tips</h4><ul>`;
+    atsTips.forEach(tip => { html += `<li>${esc(tip)}</li>`; });
+    html += `</ul></div>`;
+  }
+
+  // Industry Tips
+  if (industryTips.length > 0) {
+    html += `<div class="enhance-tips"><h4>Industry-Specific Tips</h4><ul>`;
+    industryTips.forEach(tip => { html += `<li>${esc(tip)}</li>`; });
+    html += `</ul></div>`;
+  }
+
+  html += `</div>`;
+  return html;
+}
+
+
+// ─── TAILOR RESUME ───────────────────────────────────
+const tailorResumeModal = document.getElementById('tailorResumeModal');
+
+document.getElementById('closeTailorModal')?.addEventListener('click', () => {
+  tailorResumeModal?.classList.add('hidden');
+});
+document.getElementById('closeTailorModalBtn')?.addEventListener('click', () => {
+  tailorResumeModal?.classList.add('hidden');
+});
+tailorResumeModal?.addEventListener('click', (e) => {
+  if (e.target === tailorResumeModal) tailorResumeModal.classList.add('hidden');
+});
+
+async function tailorResume(jobTitle, company, jobDesc, jobSkills) {
+  if (!lastResumeText) return;
+
+  const titleEl = document.getElementById('tailorModalTitle');
+  if (titleEl) titleEl.textContent = `Tailoring Resume for ${jobTitle} @ ${company}`;
+
+  const contentEl = document.getElementById('tailorResumeContent');
+  if (contentEl) contentEl.innerHTML = '<div class="tailor-loading">Analyzing job fit...</div>';
+
+  tailorResumeModal?.classList.remove('hidden');
+
+  const headers = AUTH.headers();
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/tailor-resume', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        resume_text: lastResumeText,
+        job_title: jobTitle,
+        company: company,
+        job_description: jobDesc,
+        job_skills: jobSkills,
+        session_id: currentSessionId,
+      }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Server error ${res.status}`);
+    }
+    const data = await res.json();
+    if (contentEl) contentEl.innerHTML = renderTailorReport(data, jobTitle, company);
+  } catch (err) {
+    if (contentEl) contentEl.innerHTML = `<p class="tailor-error">Tailoring failed: ${esc(err.message)}</p>`;
+  }
+}
+
+function renderTailorReport(data, jobTitle, company) {
+  const score = data.tailored_score || 0;
+  const scoreColor = score >= 80 ? 'var(--success)' : score >= 60 ? 'var(--accent)' : score >= 40 ? 'var(--warning)' : 'var(--danger)';
+  const kwAnalysis = data.keyword_analysis || { present: [], missing: [], nice_to_have: [] };
+  const bulletRewrites = data.bullet_rewrites || [];
+  const priorityChanges = data.priority_changes || [];
+  const skillsToAdd = data.skills_to_add || [];
+  const skillsToEmphasize = data.skills_to_emphasize || [];
+
+  let html = `<div class="tailor-report">`;
+
+  // Score ring
+  html += `<div class="tailor-score-section">
+    <div class="tailor-score-ring" style="--score-color:${scoreColor}">
+      <span class="tailor-score-num">${score}</span>
+      <span class="tailor-score-label">/100</span>
+    </div>
+    <div class="tailor-score-meta">
+      <h3>Tailored Match Score</h3>
+      <p>${esc(data.score_rationale || '')}</p>
+    </div>
+  </div>`;
+
+  // Keyword gap analysis
+  html += `<div class="keyword-gap-section"><h4>Keyword Gap Analysis</h4>
+    <div class="keyword-chips-grid">
+      <div class="keyword-col">
+        <div class="keyword-col-header kw-present-header">Present</div>
+        ${kwAnalysis.present.map(k => `<span class="keyword-chip keyword-chip-present">${esc(k)}</span>`).join('') || '<span class="kw-empty">None detected</span>'}
+      </div>
+      <div class="keyword-col">
+        <div class="keyword-col-header kw-missing-header">Missing</div>
+        ${kwAnalysis.missing.map(k => `<span class="keyword-chip keyword-chip-missing">${esc(k)}</span>`).join('') || '<span class="kw-empty">None missing</span>'}
+      </div>
+      <div class="keyword-col">
+        <div class="keyword-col-header kw-nice-header">Nice to Have</div>
+        ${(kwAnalysis.nice_to_have || []).map(k => `<span class="keyword-chip keyword-chip-nice">${esc(k)}</span>`).join('') || '<span class="kw-empty">None</span>'}
+      </div>
+    </div>
+  </div>`;
+
+  // Skills to add / emphasize
+  if (skillsToAdd.length > 0 || skillsToEmphasize.length > 0) {
+    html += `<div class="tailor-skills-section">`;
+    if (skillsToAdd.length > 0) {
+      html += `<div class="tailor-skill-group"><h5>Skills to Add</h5><div class="skill-chip-row">`;
+      skillsToAdd.forEach(s => { html += `<span class="tailor-skill-chip chip-add">${esc(s)}</span>`; });
+      html += `</div></div>`;
+    }
+    if (skillsToEmphasize.length > 0) {
+      html += `<div class="tailor-skill-group"><h5>Skills to Emphasize</h5><div class="skill-chip-row">`;
+      skillsToEmphasize.forEach(s => { html += `<span class="tailor-skill-chip chip-emphasize">${esc(s)}</span>`; });
+      html += `</div></div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Bullet rewrites
+  if (bulletRewrites.length > 0) {
+    html += `<div class="bullet-rewrites-section"><h4>Resume Bullet Rewrites</h4>`;
+    bulletRewrites.forEach(b => {
+      html += `<div class="bullet-rewrite-item">
+        <div class="bullet-row bullet-original"><span class="bullet-label">Before</span><span class="bullet-text">${esc(b.original || '')}</span></div>
+        <div class="bullet-row bullet-new"><span class="bullet-label">After</span><span class="bullet-text">${esc(b.rewritten || '')}</span></div>
+        ${b.reason ? `<div class="bullet-reason">${esc(b.reason)}</div>` : ''}
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Priority changes
+  if (priorityChanges.length > 0) {
+    html += `<div class="priority-changes-section"><h4>Priority Changes</h4>`;
+    priorityChanges.forEach(p => {
+      const impactClass = p.impact === 'high' ? 'impact-high' : p.impact === 'medium' ? 'impact-med' : 'impact-low';
+      html += `<div class="priority-change-item">
+        <span class="priority-rank">${p.rank}</span>
+        <div class="priority-change-body">
+          <span class="priority-change-text">${esc(p.change || '')}</span>
+          <span class="impact-badge ${impactClass}">${esc(p.impact || '')} impact</span>
+          ${p.section ? `<span class="priority-section">${esc(p.section)}</span>` : ''}
+        </div>
+      </div>`;
+    });
+    html += `</div>`;
+  }
+
+  html += `</div>`;
+  return html;
 }
