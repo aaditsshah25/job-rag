@@ -87,7 +87,7 @@ const STEPS = [
   },
 ];
 
-const GOOGLE_SSO_PATH = '/#googleSignInButton';
+const GOOGLE_SSO_PATH = 'https://job-rag-production.up.railway.app';
 
 function jumpTo(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
