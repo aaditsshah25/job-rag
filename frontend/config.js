@@ -1,12 +1,6 @@
 // JobMatch AI — Runtime Configuration
-// Vercel injects NEXT_PUBLIC_* vars at build time via vercel.json env.
-// For local dev, values fall back to localhost defaults.
 const CONFIG = {
-  API_BASE_URL: window.JOBMATCH_API_URL || 'https://job-rag-production.up.railway.app',
-  API_KEY: (typeof __JOBMATCH_API_KEY__ !== 'undefined' && __JOBMATCH_API_KEY__ !== '__JOBMATCH_API_KEY__')
-    ? __JOBMATCH_API_KEY__
-    : (window.JOBMATCH_API_KEY || ''),
-  GOOGLE_CLIENT_ID: (typeof __GOOGLE_CLIENT_ID__ !== 'undefined' && __GOOGLE_CLIENT_ID__ !== '__GOOGLE_CLIENT_ID__')
-    ? __GOOGLE_CLIENT_ID__
-    : (window.GOOGLE_CLIENT_ID || ''),
+  API_BASE_URL: 'https://job-rag-production.up.railway.app',
+  API_KEY: '',
+  GOOGLE_CLIENT_ID: '680440081699-mhuuujlrno9k45p34uec2o4lo5ibt30e.apps.googleusercontent.com',
 };
