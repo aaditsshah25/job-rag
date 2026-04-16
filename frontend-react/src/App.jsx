@@ -115,7 +115,7 @@ export default function App() {
               </button>
             ))}
             <a
-              href="https://jobmatch-ai-app.vercel.app/app"
+              href="/app"
               className="ml-3 rounded-lg bg-teal px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-teal-hover"
             >
               Get started
@@ -138,7 +138,7 @@ export default function App() {
                 {l.label}
               </button>
             ))}
-            <a href="https://jobmatch-ai-app.vercel.app/app" className="mt-2 block rounded-lg bg-teal px-4 py-2 text-center text-sm font-semibold text-white">
+            <a href="/app" className="mt-2 block rounded-lg bg-teal px-4 py-2 text-center text-sm font-semibold text-white">
               Get started
             </a>
           </div>
@@ -161,7 +161,7 @@ export default function App() {
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <a
-              href="https://jobmatch-ai-app.vercel.app/app"
+              href="/app"
               className="rounded-lg bg-teal px-6 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
             >
               Get started free
@@ -240,7 +240,7 @@ export default function App() {
             <h2 className="mb-3 text-2xl font-extrabold text-text-base">Ready to find your next role?</h2>
             <p className="mb-7 text-text-sub">Your resume is all you need to get started.</p>
             <a
-              href="https://jobmatch-ai-app.vercel.app/app"
+              href="/app"
               className="inline-block rounded-lg bg-teal px-7 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
             >
               Get started free
