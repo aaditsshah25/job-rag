@@ -1,12 +1,14 @@
 export default function Button({ children, variant = 'primary', className = '', ...props }) {
   const base =
-    'inline-flex items-center justify-center rounded-full px-5 py-2.5 text-sm font-semibold transition duration-200';
+    'inline-flex items-center justify-center rounded-lg px-5 py-2.5 text-sm font-semibold transition duration-200 cursor-pointer';
 
   const variants = {
     primary:
-      'bg-neon text-slate-950 hover:-translate-y-0.5 hover:bg-emerald-300 shadow-glow',
+      'bg-teal text-white hover:bg-teal-hover shadow-sm',
     secondary:
-      'border border-white/20 bg-white/5 text-ink hover:-translate-y-0.5 hover:bg-white/10',
+      'border border-border-mid bg-cream text-text-base hover:bg-cream-hover',
+    ghost:
+      'text-text-sub hover:text-text-base hover:bg-parchment-section',
   };
 
   return (

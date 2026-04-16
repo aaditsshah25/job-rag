@@ -3,22 +3,51 @@
 @tailwind utilities;
 
 :root {
-  font-family: 'Manrope', 'IBM Plex Sans', 'Segoe UI', sans-serif;
-  color: #e8ecf3;
+  font-family: 'IBM Plex Sans', 'Manrope', 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-html,
-body,
-#root {
-  min-height: 100%;
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   margin: 0;
-  background: #05050a;
+  background: #f4f2ed;
+  color: #1f1c16;
+  min-height: 100vh;
+  position: relative;
+  overflow-x: hidden;
+}
+
+/* Soft ambient blobs — matches the real app */
+body::before,
+body::after {
+  content: '';
+  position: fixed;
+  z-index: -1;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+body::before {
+  width: 520px;
+  height: 520px;
+  top: -140px;
+  right: -140px;
+  background: radial-gradient(circle, rgba(13,109,102,0.14) 0%, transparent 70%);
+}
+
+body::after {
+  width: 460px;
+  height: 460px;
+  bottom: -180px;
+  left: -140px;
+  background: radial-gradient(circle, rgba(154,95,8,0.10) 0%, transparent 70%);
 }
 
 ::selection {
-  background: rgba(16, 185, 129, 0.35);
-  color: #f9fafb;
+  background: rgba(13,109,102,0.18);
+  color: #1f1c16;
 }

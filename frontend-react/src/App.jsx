@@ -1,38 +1,26 @@
 import Button from './components/ui/Button';
 import Card from './components/ui/Card';
 
-const heroBadges = [
-  'Resume parsing + scoring',
-  'RAG semantic matching',
-  'Cover letter generation',
-  'Resume tailoring',
-  'Application tracking',
-];
-
-const builtCards = [
+const features = [
   {
-    id: '01',
     title: 'Resume parsing',
     description:
-      'Upload PDF, auto-fill profile fields, and get an AI enhancement score with prioritized improvement guidance.',
+      'Upload a PDF and auto-fill your profile. Get an AI enhancement score with prioritised improvement guidance.',
   },
   {
-    id: '02',
     title: 'RAG job matching',
     description:
-      'Semantic retrieval plus GPT-4o ranking returns top 5 matches from 2000+ listings, scored out of 10.',
+      'Semantic retrieval + GPT-4o ranking returns your top 5 matches from 2,000+ listings, scored out of 10.',
   },
   {
-    id: '03',
     title: 'Actionable insights',
     description:
-      'Every result includes fit reasons, skill gaps, experience alignment, tailored bullet rewrites, and cover letter actions.',
+      'Fit reasons, skill gaps, experience alignment, tailored bullet rewrites, and cover letter actions per job.',
   },
   {
-    id: '04',
-    title: 'Full workflow',
+    title: 'Application tracking',
     description:
-      'Track saved → applied → interviewing → offer/rejected, with bookmarks, email export, and persistent dark mode.',
+      'Move jobs through Saved → Applied → Interviewing → Offer/Rejected with optional notes.',
   },
 ];
 
@@ -40,82 +28,33 @@ const workflow = [
   {
     step: '1',
     title: 'Upload your resume',
-    description: 'Drag-and-drop PDF parsing auto-fills profile data so setup is fast and structured.',
+    description: 'Drag and drop a PDF. Fields are auto-filled so setup takes under a minute.',
   },
   {
     step: '2',
     title: 'Get AI-ranked matches',
-    description: 'RAG pipeline finds top 5 jobs and scores each role out of 10 for transparent ranking.',
+    description: 'The RAG pipeline finds your top 5 jobs and scores each one out of 10.',
   },
   {
     step: '3',
     title: 'Take action',
-    description:
-      'Generate cover letters, tailor resume bullets, and move jobs through the application tracker.',
+    description: 'Generate cover letters, tailor resume bullets, track every application.',
   },
 ];
 
-const fullFeatureSet = [
-  {
-    icon: '📄',
-    title: 'Resume Upload & PDF Parsing',
-    description: 'Drag-and-drop PDF parsing that auto-fills your profile form.',
-  },
-  {
-    icon: '🧠',
-    title: 'RAG-based Job Matching',
-    description: 'Pinecone semantic retrieval + GPT-4o ranking for top 5 matches.',
-  },
-  {
-    icon: '🎯',
-    title: 'Match Score Cards',
-    description: 'Color-coded scores, fit reasons, skill gaps, and next-step guidance.',
-  },
-  {
-    icon: '✉️',
-    title: 'Cover Letter Generation',
-    description: 'Per-job tailored letters with professional/friendly/concise tone options.',
-  },
-  {
-    icon: '📈',
-    title: 'Resume Enhancement',
-    description: '0-100 AI audit with ATS, quantification, formatting, and priority suggestions.',
-  },
-  {
-    icon: '🛠️',
-    title: 'Resume Tailoring',
-    description: 'Bullet rewrites, skills to add/emphasize, and keyword-gap analysis.',
-  },
-  {
-    icon: '🗂️',
-    title: 'Application Tracking',
-    description: 'Track status from saved to offer/rejected with optional notes.',
-  },
-  {
-    icon: '⭐',
-    title: 'Bookmarking',
-    description: 'Persist starred jobs across sessions for quick follow-up.',
-  },
-  {
-    icon: '📧',
-    title: 'Email Results',
-    description: 'Send your matched job report to yourself instantly.',
-  },
-  {
-    icon: '🌙',
-    title: 'Dark Mode',
-    description: 'Theme preference persists via localStorage.',
-  },
-  {
-    icon: '🔐',
-    title: 'Google Sign-In + Local Fallback',
-    description: 'Authenticated flow with session persistence and fallback sign-in.',
-  },
-  {
-    icon: '📋',
-    title: 'Copy to Clipboard',
-    description: 'Copy job details in one click for applications and outreach.',
-  },
+const allFeatures = [
+  'Resume upload & PDF parsing',
+  'RAG-based job matching',
+  'Match score cards',
+  'Cover letter generation',
+  'Resume enhancement score',
+  'Resume tailoring',
+  'Application tracking',
+  'Bookmarking',
+  'Email results',
+  'Dark mode',
+  'Google sign-in',
+  'Copy to clipboard',
 ];
 
 function jumpTo(id) {
@@ -124,119 +63,122 @@ function jumpTo(id) {
 
 export default function App() {
   return (
-    <div className="min-h-screen bg-canvas bg-mesh text-ink">
-      <div className="mx-auto max-w-6xl px-5 pb-16 pt-6 sm:px-8">
-        <header className="sticky top-0 z-20 mb-8 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-slate-950/65 px-4 py-3 backdrop-blur-xl">
-          <div className="text-lg font-extrabold tracking-tight">JobMatch AI</div>
-          <nav className="flex flex-wrap items-center gap-3 text-sm text-slate-300">
-            <button onClick={() => jumpTo('what-we-built')} className="hover:text-white">What We Built</button>
-            <button onClick={() => jumpTo('workflow')} className="hover:text-white">Workflow</button>
-            <button onClick={() => jumpTo('feature-set')} className="hover:text-white">Full Feature Set</button>
-            <a href="/" className="rounded-full border border-white/15 px-4 py-1.5 hover:bg-white/10">Open Current App</a>
+    <div className="min-h-screen font-sans text-text-base">
+
+      {/* ── Header ── */}
+      <header className="sticky top-0 z-20 border-b border-border-light bg-parchment/90 backdrop-blur-md">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-5 py-3 sm:px-8">
+          <div className="text-base font-bold tracking-tight text-text-base">
+            JobMatch <span className="text-teal">AI</span>
+          </div>
+          <nav className="flex items-center gap-1 text-sm">
+            <button
+              onClick={() => jumpTo('how-it-works')}
+              className="rounded-md px-3 py-1.5 text-text-sub transition hover:bg-parchment-section hover:text-text-base"
+            >
+              How it works
+            </button>
+            <button
+              onClick={() => jumpTo('features')}
+              className="rounded-md px-3 py-1.5 text-text-sub transition hover:bg-parchment-section hover:text-text-base"
+            >
+              Features
+            </button>
+            <a
+              href="/"
+              className="ml-2 rounded-lg border border-teal bg-teal px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-teal-hover"
+            >
+              Open app
+            </a>
           </nav>
-        </header>
+        </div>
+      </header>
 
-        <section className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
-          <Card className="animate-rise">
-            <p className="mb-3 text-xs font-bold uppercase tracking-[0.2em] text-emerald-300">RAG-powered job search</p>
-            <h1 className="mb-4 max-w-3xl text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-6xl">
-              One AI workspace for matching, tailoring, and applying.
-            </h1>
-            <p className="max-w-2xl text-slate-300">
-              Upload your resume, get RAG-matched to real jobs, generate cover letters, tailor your resume, and track your applications - all in one place.
-            </p>
-            <div className="mt-7 flex flex-wrap gap-3">
-              <Button variant="secondary" onClick={() => jumpTo('workflow')}>See Workflow</Button>
-              <Button onClick={() => (window.location.href = '/')}>Get Started</Button>
-            </div>
-            <div className="mt-6 flex flex-wrap gap-2">
-              {heroBadges.map((badge) => (
-                <span key={badge} className="rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-semibold text-emerald-200">
-                  {badge}
-                </span>
-              ))}
-            </div>
-          </Card>
+      <main className="mx-auto max-w-5xl px-5 pb-20 pt-14 sm:px-8">
 
-          <Card className="animate-rise [animation-delay:120ms]">
-            <p className="mb-2 text-xs font-bold uppercase tracking-[0.2em] text-mango">Product snapshot</p>
-            <h2 className="mb-3 text-2xl font-bold text-white">What's inside</h2>
-            <ul className="grid grid-cols-1 gap-2 text-sm text-slate-200">
-              {[
-                'Resume upload',
-                'AI scoring',
-                'RAG matching',
-                'Cover letters',
-                'Resume tailoring',
-                'Application tracking',
-                'Bookmarks',
-                'Email export',
-              ].map((item) => (
-                <li key={item} className="rounded-xl border border-white/10 bg-white/[0.02] px-3 py-2">
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </Card>
+        {/* ── Hero ── */}
+        <section className="animate-rise mb-16 max-w-2xl">
+          <span className="mb-4 inline-block rounded-full border border-teal/30 bg-teal-light px-3 py-1 text-xs font-semibold text-teal">
+            RAG-powered · GPT-4o
+          </span>
+          <h1 className="mb-4 text-4xl font-extrabold leading-tight tracking-tight text-text-base sm:text-5xl">
+            Match, tailor, and track<br />your job search in one place.
+          </h1>
+          <p className="mb-8 text-base leading-relaxed text-text-sub">
+            Upload your resume, get semantically matched to real jobs, generate cover letters,
+            tailor your bullets, and track every application — all from a single dashboard.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            <Button onClick={() => (window.location.href = '/')}>Get started</Button>
+            <Button variant="secondary" onClick={() => jumpTo('how-it-works')}>
+              See how it works
+            </Button>
+          </div>
         </section>
 
-        <section id="what-we-built" className="mt-10">
-          <div className="mb-5 max-w-3xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-emerald-300">Product summary</p>
-            <h2 className="mt-2 text-3xl font-extrabold text-white">What we built</h2>
-            <p className="mt-2 text-slate-300">
-              Your landing page now reflects the actual shipped capabilities, not a future roadmap.
-            </p>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2">
-            {builtCards.map((card) => (
-              <Card key={card.id} className="animate-rise">
-                <p className="mb-2 text-xs font-bold tracking-[0.15em] text-emerald-300">{card.id}</p>
-                <h3 className="mb-2 text-xl font-bold text-white">{card.title}</h3>
-                <p className="text-sm text-slate-300">{card.description}</p>
+        {/* ── What we built ── */}
+        <section id="what-we-built" className="mb-16">
+          <SectionLabel>What we built</SectionLabel>
+          <div className="mt-6 grid gap-4 sm:grid-cols-2">
+            {features.map((f, i) => (
+              <Card key={f.title} className={`animate-rise [animation-delay:${i * 60}ms]`}>
+                <h3 className="mb-1.5 font-semibold text-text-base">{f.title}</h3>
+                <p className="text-sm leading-relaxed text-text-sub">{f.description}</p>
               </Card>
             ))}
           </div>
         </section>
 
-        <section id="workflow" className="mt-12">
-          <div className="mb-5 max-w-3xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-mango">User journey</p>
-            <h2 className="mt-2 text-3xl font-extrabold text-white">How it works</h2>
-            <p className="mt-2 text-slate-300">Fast path from resume ingestion to job actions.</p>
-          </div>
-          <div className="grid gap-4 md:grid-cols-3">
+        {/* ── How it works ── */}
+        <section id="how-it-works" className="mb-16">
+          <SectionLabel>How it works</SectionLabel>
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
             {workflow.map((step) => (
               <Card key={step.step} className="animate-rise">
-                <div className="mb-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-neon text-sm font-bold text-slate-950">
+                <div className="mb-3 inline-flex h-7 w-7 items-center justify-center rounded-full bg-teal text-xs font-bold text-white">
                   {step.step}
                 </div>
-                <h3 className="mb-2 text-lg font-bold text-white">{step.title}</h3>
-                <p className="text-sm text-slate-300">{step.description}</p>
+                <h3 className="mb-1.5 font-semibold text-text-base">{step.title}</h3>
+                <p className="text-sm leading-relaxed text-text-sub">{step.description}</p>
               </Card>
             ))}
           </div>
         </section>
 
-        <section id="feature-set" className="mt-12">
-          <div className="mb-5 max-w-3xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-rose">Shipped capabilities</p>
-            <h2 className="mt-2 text-3xl font-extrabold text-white">Full Feature Set</h2>
-            <p className="mt-2 text-slate-300">All 12 features are already live in your current backend-powered app.</p>
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {fullFeatureSet.map((feature) => (
-              <Card key={feature.title} className="animate-rise">
-                <h3 className="mb-2 text-lg font-bold text-white">
-                  <span className="mr-2">{feature.icon}</span>
-                  {feature.title}
-                </h3>
-                <p className="text-sm text-slate-300">{feature.description}</p>
-              </Card>
+        {/* ── Feature list ── */}
+        <section id="features" className="mb-16">
+          <SectionLabel>Full feature set</SectionLabel>
+          <div className="mt-6 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {allFeatures.map((name) => (
+              <div
+                key={name}
+                className="flex items-center gap-2.5 rounded-lg border border-border-light bg-cream px-4 py-3 text-sm text-text-sub"
+              >
+                <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-teal" />
+                {name}
+              </div>
             ))}
           </div>
         </section>
-      </div>
+
+        {/* ── CTA ── */}
+        <section className="rounded-xl border border-teal/20 bg-teal-light px-8 py-10 text-center">
+          <h2 className="mb-2 text-2xl font-bold text-text-base">Ready to find your next role?</h2>
+          <p className="mb-6 text-text-sub">Everything you need is already live.</p>
+          <Button onClick={() => (window.location.href = '/')}>Open the app</Button>
+        </section>
+
+      </main>
+
+      <footer className="border-t border-border-light py-6 text-center text-xs text-text-muted">
+        JobMatch AI · Built with RAG + GPT-4o
+      </footer>
     </div>
+  );
+}
+
+function SectionLabel({ children }) {
+  return (
+    <h2 className="text-xs font-bold uppercase tracking-widest text-teal">{children}</h2>
   );
 }
