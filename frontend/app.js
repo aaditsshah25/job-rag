@@ -41,8 +41,6 @@ const errorMessage = document.getElementById('error-message');
 const resultsContainer = document.getElementById('results-container');
 const resultsContent = document.getElementById('results-content');
 
-const experienceSlider = document.getElementById('experience');
-const experienceValue = document.getElementById('experienceValue');
 const applicationStatusByKey = new Map();
 
 // ─── DARK MODE TOGGLE ────────────────────────────────
@@ -67,118 +65,8 @@ if (jobTitleList && typeof JOB_TITLES !== 'undefined') {
   });
 }
 
-// Populate skills datalist
-const skillsList = document.getElementById('skillsList');
-if (skillsList && typeof COMMON_SKILLS !== 'undefined') {
-  COMMON_SKILLS.forEach(skill => {
-    const option = document.createElement('option');
-    option.value = skill;
-    skillsList.appendChild(option);
-  });
-}
-
-
-// ─── TAG-BASED SKILLS INPUT ─────────────────────────
-const skillsTagContainer = document.getElementById('skillsTagContainer');
-const skillsInput = document.getElementById('skillsInput');
-const skillsHidden = document.getElementById('skills');
+// skillTags array — populated from resume parse, not from UI
 const skillTags = [];
-
-// Add a skill tag
-function addSkillTag(skillName) {
-  const trimmed = skillName.trim();
-  if (!trimmed || skillTags.includes(trimmed)) return;
-
-  skillTags.push(trimmed);
-
-  // Create tag element
-  const tag = document.createElement('div');
-  tag.className = 'skill-tag';
-  const label = document.createElement('span');
-  label.textContent = trimmed;
-  const remove = document.createElement('span');
-  remove.className = 'skill-tag-remove';
-  remove.textContent = '×';
-  tag.appendChild(label);
-  tag.appendChild(remove);
-
-  // Remove on click
-  remove.addEventListener('click', () => {
-    const index = skillTags.indexOf(trimmed);
-    if (index > -1) {
-      skillTags.splice(index, 1);
-      tag.remove();
-      updateHiddenSkillsField();
-    }
-  });
-
-  // Insert before the input field
-  skillsTagContainer.insertBefore(tag, skillsInput);
-  updateHiddenSkillsField();
-}
-
-// Update hidden field with comma-separated skills
-function updateHiddenSkillsField() {
-  skillsHidden.value = skillTags.join(', ');
-}
-
-// Handle input events
-skillsInput.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter' || e.key === ',') {
-    e.preventDefault();
-    const value = skillsInput.value.trim();
-    if (value) {
-      addSkillTag(value);
-      skillsInput.value = '';
-    }
-  } else if (e.key === 'Backspace' && !skillsInput.value && skillTags.length > 0) {
-    // Remove last tag if backspace pressed on empty input
-    const lastSkill = skillTags[skillTags.length - 1];
-    const tags = skillsTagContainer.querySelectorAll('.skill-tag');
-    if (tags.length > 0) {
-      tags[tags.length - 1].remove();
-      skillTags.pop();
-      updateHiddenSkillsField();
-    }
-  }
-});
-
-// Also allow adding on blur (paste support)
-skillsInput.addEventListener('blur', () => {
-  const value = skillsInput.value.trim();
-  if (value) {
-    // Split by comma in case user pasted multiple
-    const skills = value.split(',').map(s => s.trim()).filter(Boolean);
-    skills.forEach(skill => addSkillTag(skill));
-    skillsInput.value = '';
-  }
-});
-
-// Click on container focuses the input
-skillsTagContainer.addEventListener('click', () => {
-  skillsInput.focus();
-});
-
-
-// ─── BENEFITS CHECKBOX LIMIT ─────────────────────────
-const benefitsCheckboxes = document.querySelectorAll('input[name="benefits"]');
-const MAX_BENEFITS = 3;
-
-benefitsCheckboxes.forEach(checkbox => {
-  checkbox.addEventListener('change', () => {
-    const checked = document.querySelectorAll('input[name="benefits"]:checked');
-    if (checked.length > MAX_BENEFITS) {
-      checkbox.checked = false;
-    }
-  });
-});
-
-
-// ─── EXPERIENCE SLIDER ──────────────────────────────
-experienceSlider.addEventListener('input', () => {
-  const val = experienceSlider.value;
-  experienceValue.textContent = `${val} yr${val !== '1' ? 's' : ''}`;
-});
 
 
 // ─── FETCH WITH RETRY ───────────────────────────────
@@ -279,16 +167,16 @@ function getCurrentProfileFromForm() {
     name: document.getElementById('fullName').value.trim(),
     email: document.getElementById('email').value.trim(),
     desiredRole: document.getElementById('desiredRole').value.trim(),
-    experience: parseInt(experienceSlider.value, 10),
+    experience: parseInt(document.getElementById('experience').value, 10) || 0,
     skills: skillTags.slice(),
-    education: document.getElementById('education').value,
+    education: document.getElementById('education').value.trim(),
     industry: document.getElementById('industry').value.trim(),
     location: document.getElementById('location').value.trim(),
     workType: document.getElementById('workType').value,
     salaryMin: document.getElementById('salaryMin').value ? parseInt(document.getElementById('salaryMin').value, 10) : null,
-    companySize: document.getElementById('companySize').value,
-    benefits: Array.from(document.querySelectorAll('input[name="benefits"]:checked')).map(cb => cb.value),
-    workAuth: document.getElementById('workAuth').value,
+    companySize: document.getElementById('companySize').value.trim() || 'Any',
+    benefits: [],
+    workAuth: document.getElementById('workAuth').value.trim() || 'Not Specified',
     additional: document.getElementById('additional').value.trim(),
   };
 }
@@ -301,9 +189,8 @@ form.addEventListener('submit', async (e) => {
   // Collect all form values
   const profile = getCurrentProfileFromForm();
 
-  if (profile.skills.length === 0) {
-    showError('Please add at least one key skill before searching.');
-    skillsInput.focus();
+  if (!lastResumeText && profile.skills.length === 0 && !profile.desiredRole) {
+    showError('Please upload your resume before searching.');
     return;
   }
 
@@ -401,26 +288,27 @@ async function handleResumeUpload(file) {
     }
     const data = await res.json();
 
-    // Auto-populate form fields
+    // Auto-populate hidden fields from parsed resume
     if (data.name) document.getElementById('fullName').value = data.name;
-    if (data.recent_role) document.getElementById('desiredRole').value = data.recent_role;
     if (data.experience_years) {
       const expVal = Math.min(Math.max(parseInt(data.experience_years, 10) || 0, 0), 30);
-      experienceSlider.value = expVal;
-      experienceValue.textContent = `${expVal} yr${expVal !== 1 ? 's' : ''}`;
+      document.getElementById('experience').value = expVal;
     }
     if (data.education) document.getElementById('education').value = data.education;
     if (data.industries && data.industries.length > 0) {
       document.getElementById('industry').value = data.industries[0];
     }
     if (data.skills && data.skills.length > 0) {
-      // Clear existing tags
-      skillsTagContainer.querySelectorAll('.skill-tag').forEach(t => t.remove());
       skillTags.length = 0;
-      data.skills.slice(0, 12).forEach(skill => addSkillTag(skill));
+      data.skills.slice(0, 12).forEach(skill => skillTags.push(skill));
+      document.getElementById('skills').value = skillTags.join(', ');
+    }
+    // Pre-fill desired role only if the user hasn't typed one
+    if (data.recent_role && !document.getElementById('desiredRole').value) {
+      document.getElementById('desiredRole').value = data.recent_role;
     }
 
-    resumeStatus.textContent = 'Resume parsed! Fields auto-filled.';
+    resumeStatus.textContent = 'Resume parsed! Skills and experience extracted.';
     resumeStatus.className = 'resume-status success';
     // Store file for enhancement feature
     lastResumeFile = file;
