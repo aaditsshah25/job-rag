@@ -87,6 +87,8 @@ const STEPS = [
   },
 ];
 
+const GOOGLE_SSO_PATH = '/app#googleSignInButton';
+
 function jumpTo(id) {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -120,6 +122,12 @@ export default function App() {
             >
               Get started
             </a>
+            <a
+              href={GOOGLE_SSO_PATH}
+              className="ml-2 rounded-lg border border-border-mid bg-cream px-4 py-1.5 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
+            >
+              Sign in with Google
+            </a>
           </nav>
           <button className="sm:hidden p-1 text-text-sub" onClick={() => setMenuOpen(!menuOpen)}>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
@@ -140,6 +148,12 @@ export default function App() {
             ))}
             <a href="/app" className="mt-2 block rounded-lg bg-teal px-4 py-2 text-center text-sm font-semibold text-white">
               Get started
+            </a>
+            <a
+              href={GOOGLE_SSO_PATH}
+              className="mt-2 block rounded-lg border border-border-mid bg-cream px-4 py-2 text-center text-sm font-semibold text-text-base"
+            >
+              Sign in with Google
             </a>
           </div>
         )}
@@ -165,6 +179,12 @@ export default function App() {
               className="rounded-lg bg-teal px-6 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
             >
               Get started free
+            </a>
+            <a
+              href={GOOGLE_SSO_PATH}
+              className="rounded-lg border border-border-mid bg-cream px-6 py-3 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
+            >
+              Sign in with Google
             </a>
             <button
               onClick={() => jumpTo('how-it-works')}
@@ -244,6 +264,12 @@ export default function App() {
               className="inline-block rounded-lg bg-teal px-7 py-3 text-sm font-semibold text-white shadow-card transition hover:bg-teal-hover"
             >
               Get started free
+            </a>
+            <a
+              href={GOOGLE_SSO_PATH}
+              className="ml-3 inline-block rounded-lg border border-border-mid bg-cream px-7 py-3 text-sm font-semibold text-text-base transition hover:bg-cream-hover"
+            >
+              Sign in with Google
             </a>
           </div>
         </div>
