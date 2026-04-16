@@ -120,9 +120,12 @@
 <body>
   <section id="marketing-shell">
     <header class="landing-header">
-      <div class="landing-brand">JobMatchAI</div>
+      <div class="landing-brand">JobMatch AI</div>
       <nav class="landing-nav">
-        <a href="#how-it-works">How It Works</a>
+        <a href="#what-we-built">What We Built</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#roadmap">Roadmap</a>
+        <a href="#workflow">How It Works</a>
         <button id="startSignInBtn" class="landing-btn-secondary" type="button">Sign In</button>
       </nav>
     </header>
@@ -130,26 +133,74 @@
     <main class="landing-main">
       <section class="hero-section">
         <div class="hero-copy">
-          <p class="hero-kicker">AI Career Copilot</p>
-          <h1>From resume to matched jobs in under a minute.</h1>
-          <p>JobMatchAI scans your profile, scores fit against live postings, and gives clear next steps.</p>
+          <p class="hero-kicker">RAG-powered career search</p>
+          <h1>Find the right role faster with a job search engine that understands your profile.</h1>
+          <p>JobMatch AI turns your resume or profile into structured signals, compares them with real job listings, and returns ranked matches, skill gaps, and action steps.</p>
           <div class="hero-actions">
-            <button id="heroHowBtn" class="landing-btn-secondary" type="button">See How It Works</button>
+            <button id="heroHowBtn" class="landing-btn-secondary" type="button" data-scroll-target="workflow">See the workflow</button>
             <button id="heroStartBtn" class="landing-btn-primary" type="button">Get Started</button>
           </div>
+          <div class="hero-badges" aria-label="Key platform benefits">
+            <span>Resume parsing</span>
+            <span>Match scoring</span>
+            <span>Cover letter drafting</span>
+          </div>
         </div>
-        <div class="hero-card">
-          <h3>Why teams use it</h3>
-          <ul>
-            <li>Resume parsing and profile prefill</li>
-            <li>Match scoring with gaps and strengths</li>
-            <li>Actionable next steps and cover letters</li>
-          </ul>
+        <div class="hero-panel">
+          <div class="panel-card spotlight-card">
+            <p class="panel-label">Current build</p>
+            <h3>What we have already done</h3>
+            <ul>
+              <li>AI-assisted job matching from a structured candidate profile</li>
+              <li>Resume upload and form-based profile capture</li>
+              <li>Google sign-in and auth gate for access control</li>
+              <li>RAG-driven scoring, summaries, and next-step guidance</li>
+            </ul>
+          </div>
+          <div class="panel-card recommendation-card">
+            <p class="panel-label">Recommended next layer</p>
+            <h3>What we should have next</h3>
+            <p>Make the product feel complete with saved applications, ATS insights, stronger personalization, and a clearer progress tracker for every job.</p>
+          </div>
         </div>
       </section>
 
-      <section id="how-it-works" class="how-section">
-        <h2>How It Works</h2>
+      <section id="what-we-built" class="value-section">
+        <div class="section-heading">
+          <p class="section-kicker">Product summary</p>
+          <h2>Everything already in place</h2>
+          <p>The current app already covers the core job-search flow: capture the user profile, run the match engine, and show a clear path to apply with confidence.</p>
+        </div>
+        <div class="value-grid">
+          <article class="value-card">
+            <span>01</span>
+            <h3>Profile intake</h3>
+            <p>Users can enter their target role, skills, experience, and preferences or upload a resume to start the matching flow.</p>
+          </article>
+          <article class="value-card">
+            <span>02</span>
+            <h3>RAG matching</h3>
+            <p>The backend compares candidate data with job listings so the result is based on real roles instead of generic recommendations.</p>
+          </article>
+          <article class="value-card">
+            <span>03</span>
+            <h3>Explainable results</h3>
+            <p>Matches are paired with strengths, gaps, and supporting context, which makes the ranking easier to trust.</p>
+          </article>
+          <article class="value-card">
+            <span>04</span>
+            <h3>User convenience</h3>
+            <p>Auth, bookmarks, and dark mode give the product a more finished feel and make repeated use practical.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="workflow" class="how-section">
+        <div class="section-heading">
+          <p class="section-kicker">User journey</p>
+          <h2>How it works</h2>
+          <p>The landing page should show the product flow in a way that is easy to understand before a visitor signs in.</p>
+        </div>
         <div class="how-grid">
           <article class="how-card">
             <span>1</span>
@@ -168,6 +219,40 @@
           </article>
         </div>
         <button id="howStartBtn" class="landing-btn-primary" type="button">Continue to Sign In</button>
+      </section>
+
+      <section id="roadmap" class="roadmap-section">
+        <div class="section-heading">
+          <p class="section-kicker">What should come next</p>
+          <h2>Features that would make the product stronger</h2>
+          <p>The current system is solid for matching. The next stage should help users manage the whole application process, not just discover jobs.</p>
+        </div>
+        <div class="roadmap-grid">
+          <article class="roadmap-card">
+            <h3>Application tracker</h3>
+            <p>Let users mark saved, applied, interviewing, and rejected roles so the product becomes a daily workflow tool.</p>
+          </article>
+          <article class="roadmap-card">
+            <h3>ATS readiness score</h3>
+            <p>Show resume alignment against common ATS signals, missing keywords, and formatting issues before submission.</p>
+          </article>
+          <article class="roadmap-card">
+            <h3>Smarter personalization</h3>
+            <p>Learn from bookmarks, clicks, and past matches to improve recommendations over time for each user.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="cta-section">
+        <div class="cta-copy">
+          <p class="section-kicker">Ready to start</p>
+          <h2>Move from profile to shortlist without wasting time on bad-fit roles.</h2>
+          <p>Sign in to access the matching experience and see how the RAG pipeline ranks jobs for your profile.</p>
+        </div>
+        <div class="cta-actions">
+          <button id="ctaStartBtn" class="landing-btn-primary" type="button">Get Started</button>
+          <button id="ctaRoadmapBtn" class="landing-btn-secondary" type="button" data-scroll-target="roadmap">See Roadmap</button>
+        </div>
       </section>
     </main>
   </section>

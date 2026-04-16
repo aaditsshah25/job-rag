@@ -9,14 +9,30 @@
     });
   }
 
+  function scrollToTarget(targetId) {
+    const target = document.getElementById(targetId);
+    if (!target) return;
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     bindStart(document.getElementById('startSignInBtn'));
     bindStart(document.getElementById('heroStartBtn'));
     bindStart(document.getElementById('howStartBtn'));
+    bindStart(document.getElementById('ctaStartBtn'));
+
+    document.querySelectorAll('[data-scroll-target]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const targetId = button.getAttribute('data-scroll-target');
+        if (targetId) {
+          scrollToTarget(targetId);
+        }
+      });
+    });
 
     const heroHowBtn = document.getElementById('heroHowBtn');
     heroHowBtn?.addEventListener('click', () => {
-      document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      scrollToTarget('workflow');
     });
   });
 })();

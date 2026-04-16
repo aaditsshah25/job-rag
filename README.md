@@ -26,7 +26,7 @@ For Railway and other production deploys, it is safer to leave startup indexing 
 
 **Step 3 — Open the app**
 
-Open `frontend/index.html` in your browser. No build step needed.
+Open `http://localhost:8000/` in your browser. The backend now serves the frontend directly.
 
 ---
 

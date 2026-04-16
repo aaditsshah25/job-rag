@@ -30,6 +30,7 @@ from typing import Optional
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
@@ -233,6 +234,8 @@ async def lifespan(app: FastAPI):
 
 # ─── FastAPI App ──────────────────────────────────────
 app = FastAPI(title="JobMatch AI Backend", version="2.0.0", lifespan=lifespan)
+
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
 
 if _SLOWAPI_AVAILABLE:
     app.state.limiter = limiter
@@ -1135,3 +1138,6 @@ async def get_resume_tailoring(session_id: str):
         item["analysis"] = _safe_json_loads(item.get("analysis_json", "{}") or "{}", {})
         result.append(item)
     return {"tailoring": result}
+
+
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
