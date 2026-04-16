@@ -10,9 +10,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import logging
 from typing import Any
 from urllib.parse import quote
 from urllib.request import Request, urlopen
+
+log = logging.getLogger(__name__)
 
 
 def _safe_str(val: Any) -> str:
@@ -358,7 +361,8 @@ def fetch_configured_sources() -> list[dict[str, Any]]:
     for fetcher in fetchers:
         try:
             combined.extend(fetcher())
-        except Exception:
-            # Keep indexing resilient if one source fails.
+        except Exception as exc:
+            # Keep indexing resilient if one source fails, but emit a warning for debugging.
+            log.warning("External source fetch failed for %s: %s", fetcher.__name__, exc)
             continue
     return combined

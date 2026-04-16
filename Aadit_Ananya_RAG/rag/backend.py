@@ -709,6 +709,12 @@ def _safe_str(val) -> str:
         return ""
     return str(val).strip()
 
+def _safe_json_loads(raw: str, default):
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
 def _parse_salary(raw: str) -> str:
     raw = _safe_str(raw)
     if not raw:
@@ -1376,7 +1382,7 @@ async def get_bookmarks(session_id: str):
     result = []
     for row in rows:
         item = dict(row)
-        item["job_data"] = json.loads(item.get("job_data", "{}") or "{}")
+        item["job_data"] = _safe_json_loads(item.get("job_data", "{}") or "{}", {})
         result.append(item)
     return {"bookmarks": result}
 

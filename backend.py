@@ -1148,5 +1148,14 @@ if os.path.isdir(REACT_FRONTEND_DIR):
         return RedirectResponse(url="/react/")
 
     app.mount("/react", StaticFiles(directory=REACT_FRONTEND_DIR, html=True), name="frontend-react")
+else:
+    log.warning("React frontend not mounted because directory was not found: %s", REACT_FRONTEND_DIR)
 
-app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+else:
+    log.warning("Frontend static files not mounted because directory was not found: %s", FRONTEND_DIR)
+
+    @app.get("/")
+    async def root_fallback():
+        return {"status": "ok", "detail": "Frontend assets are not available on this deployment."}
