@@ -110,7 +110,6 @@ const AUTH = {
       });
     }
 
-    google.accounts.id.prompt();
     this._gsiInitialized = true;
   },
 
