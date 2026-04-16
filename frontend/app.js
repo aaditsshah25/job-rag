@@ -3,7 +3,15 @@
    ══════════════════════════════════════════════════════ */
 
 // CONFIG is loaded from config.js
-// AUTH is loaded from auth.js
+
+// No auth required for localhost
+const AUTH = {
+  headers(extra = {}) {
+    const h = { 'Content-Type': 'application/json', ...extra };
+    if (CONFIG.API_KEY) h['X-Api-Key'] = CONFIG.API_KEY;
+    return h;
+  },
+};
 
 // ─── SESSION ID ───────────────────────────────────────
 const SESSION_ID_KEY = 'jobmatch_session_id';
