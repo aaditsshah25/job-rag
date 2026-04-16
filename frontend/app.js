@@ -49,6 +49,10 @@ const errorState = document.getElementById('error-state');
 const errorMessage = document.getElementById('error-message');
 const resultsContainer = document.getElementById('results-container');
 const resultsContent = document.getElementById('results-content');
+const skillsList = document.getElementById('skillsList');
+const skillsTagContainer = document.getElementById('skillsTagContainer');
+const skillsInput = document.getElementById('skillsInput');
+const skillsHidden = document.getElementById('skills');
 
 const applicationStatusByKey = new Map();
 
@@ -76,6 +80,97 @@ if (jobTitleList && typeof JOB_TITLES !== 'undefined') {
 
 // skillTags array — populated from resume parse, not from UI
 const skillTags = [];
+
+function updateHiddenSkillsField() {
+  if (skillsHidden) {
+    skillsHidden.value = skillTags.join(', ');
+  }
+}
+
+function renderSkillTags() {
+  if (!skillsTagContainer || !skillsInput) return;
+  skillsTagContainer.querySelectorAll('.skill-tag').forEach((el) => el.remove());
+  skillTags.forEach((skill, index) => {
+    const tag = document.createElement('div');
+    tag.className = 'skill-tag';
+
+    const textNode = document.createElement('span');
+    textNode.textContent = skill;
+    tag.appendChild(textNode);
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'skill-tag-remove';
+    removeBtn.textContent = '×';
+    removeBtn.setAttribute('aria-label', `Remove ${skill}`);
+    removeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      skillTags.splice(index, 1);
+      renderSkillTags();
+      updateHiddenSkillsField();
+    });
+    tag.appendChild(removeBtn);
+
+    skillsTagContainer.insertBefore(tag, skillsInput);
+  });
+}
+
+function addSkillTag(skillName) {
+  const trimmed = (skillName || '').trim();
+  if (!trimmed) return;
+  const exists = skillTags.some((s) => s.toLowerCase() === trimmed.toLowerCase());
+  if (exists) return;
+  skillTags.push(trimmed);
+  renderSkillTags();
+  updateHiddenSkillsField();
+}
+
+function setSkillTags(skills) {
+  skillTags.length = 0;
+  (skills || []).forEach((skill) => {
+    const trimmed = (skill || '').trim();
+    if (!trimmed) return;
+    const exists = skillTags.some((s) => s.toLowerCase() === trimmed.toLowerCase());
+    if (!exists) skillTags.push(trimmed);
+  });
+  renderSkillTags();
+  updateHiddenSkillsField();
+}
+
+if (skillsList && typeof COMMON_SKILLS !== 'undefined') {
+  COMMON_SKILLS.forEach((skill) => {
+    const option = document.createElement('option');
+    option.value = skill;
+    skillsList.appendChild(option);
+  });
+}
+
+if (skillsInput) {
+  skillsInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ',') {
+      e.preventDefault();
+      addSkillTag(skillsInput.value);
+      skillsInput.value = '';
+      return;
+    }
+    if (e.key === 'Backspace' && !skillsInput.value.trim() && skillTags.length > 0) {
+      skillTags.pop();
+      renderSkillTags();
+      updateHiddenSkillsField();
+    }
+  });
+
+  skillsInput.addEventListener('blur', () => {
+    const val = skillsInput.value.trim();
+    if (!val) return;
+    val.split(',').forEach((part) => addSkillTag(part));
+    skillsInput.value = '';
+  });
+}
+
+if (skillsTagContainer && skillsInput) {
+  skillsTagContainer.addEventListener('click', () => skillsInput.focus());
+}
 
 
 // ─── FETCH WITH RETRY ───────────────────────────────
@@ -308,9 +403,7 @@ async function handleResumeUpload(file) {
       document.getElementById('industry').value = data.industries[0];
     }
     if (data.skills && data.skills.length > 0) {
-      skillTags.length = 0;
-      data.skills.slice(0, 12).forEach(skill => skillTags.push(skill));
-      document.getElementById('skills').value = skillTags.join(', ');
+      setSkillTags(data.skills.slice(0, 20));
     }
     // Pre-fill desired role only if the user hasn't typed one
     if (data.recent_role && !document.getElementById('desiredRole').value) {
@@ -755,21 +848,40 @@ function renderMatchesSection(section) {
     }
   }
   if (currentJob) jobs.push(currentJob);
+  const validJobs = jobs.filter(isRenderableJob);
 
-  if (jobs.length === 0) {
-    return `<div class="result-section"><h2 class="section-heading">${esc(section.title)}</h2>${renderBasicContent(section.content)}</div>`;
+  if (validJobs.length === 0) {
+    return `<div class="result-section"><h2 class="section-heading">${esc(section.title)}</h2><p class="empty-msg">No relevant live jobs found for this query. Try a broader role or add more skills.</p></div>`;
   }
 
   let html = '<div class="matches-section">';
   html += `<div class="matches-header">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
     <span>Top Matches</span>
-    <span class="matches-count">${jobs.length} found</span>
+    <span class="matches-count">${validJobs.length} found</span>
   </div>`;
 
-  jobs.forEach((job, idx) => { html += renderJobCard(job, idx + 1); });
+  validJobs.forEach((job, idx) => { html += renderJobCard(job, idx + 1); });
   html += '</div>';
   return html;
+}
+
+function isRenderableJob(job) {
+  if (!job) return false;
+  const combined = `${job.title || ''}\n${job.content || ''}`
+    .toLowerCase()
+    .replace(/\*\*/g, '')
+    .trim();
+  if (!combined) return false;
+  const blockedPatterns = [
+    /no\s+job\s+posting/,
+    /no\s+jobs?\s+found/,
+    /no\s+relevant\s+jobs?/,
+    /not\s+available/,
+    /\bn\/a\b/,
+    /unable\s+to\s+find\s+jobs?/,
+  ];
+  return !blockedPatterns.some((pattern) => pattern.test(combined));
 }
 
 

@@ -483,6 +483,8 @@ input[type="range"]::-moz-range-thumb {
   justify-content: center;
   width: 15px;
   height: 15px;
+  border: 0;
+  background: transparent;
   border-radius: 50%;
   font-size: 0.72rem;
   font-weight: 700;
@@ -1750,6 +1752,95 @@ input[type="range"]::-moz-range-thumb {
   background: rgba(24, 32, 28, 0.84);
 }
 
+[data-theme="dark"] .glass-panel {
+  background: linear-gradient(170deg, rgba(24, 32, 28, 0.96), rgba(20, 27, 24, 0.92));
+  border-color: var(--border-light);
+}
+
+[data-theme="dark"] .resume-dropzone {
+  background: var(--bg-section);
+  border-color: var(--border-medium);
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .resume-dropzone:hover,
+[data-theme="dark"] .resume-dropzone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+  color: var(--accent-text);
+}
+
+[data-theme="dark"] .btn-secondary {
+  background: var(--bg-card);
+  border-color: var(--border-medium);
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .btn-secondary:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .state-card {
+  background: linear-gradient(180deg, rgba(24, 32, 28, 0.96), rgba(20, 27, 24, 0.92));
+  border-color: var(--border-medium);
+}
+
+[data-theme="dark"] .state-card h3 {
+  color: var(--text-primary);
+}
+
+[data-theme="dark"] .state-card p {
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .state-icon {
+  color: var(--accent);
+  opacity: 0.95;
+}
+
+[data-theme="dark"] .summary-card,
+[data-theme="dark"] .job-card,
+[data-theme="dark"] .global-actions-card {
+  background: linear-gradient(180deg, rgba(24, 32, 28, 0.96), rgba(20, 27, 24, 0.92));
+  border-color: var(--border-medium);
+}
+
+[data-theme="dark"] .job-card-header:hover {
+  background: rgba(42, 184, 155, 0.08);
+}
+
+[data-theme="dark"] .matches-count,
+[data-theme="dark"] .stat-item,
+[data-theme="dark"] .meta-chip,
+[data-theme="dark"] .reasons-section,
+[data-theme="dark"] .gaps-section,
+[data-theme="dark"] .actions-section,
+[data-theme="dark"] .job-experience {
+  background: var(--bg-section);
+  border-color: var(--border-medium);
+}
+
+[data-theme="dark"] .card-copy-btn {
+  background: var(--bg-section);
+  border-color: var(--border-medium);
+  color: var(--text-secondary);
+}
+
+[data-theme="dark"] .card-copy-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+[data-theme="dark"] .empty-msg {
+  background: var(--bg-section);
+  border: 1px dashed var(--border-medium);
+  border-radius: var(--radius-lg);
+  color: var(--text-secondary);
+}
+
 [data-theme="dark"] body::before {
   background: radial-gradient(circle, rgba(42, 184, 155, 0.2) 0%, rgba(42, 184, 155, 0) 70%);
 }
@@ -1868,7 +1959,7 @@ input[type="range"]::-moz-range-thumb {
   background: var(--bg-section);
   border: 1.5px dashed var(--border-medium);
   border-radius: var(--radius-lg);
-  margin-bottom: var(--space-lg);
+  margin-bottom: var(--space-sm);
   cursor: pointer;
   transition: all var(--transition-fast);
   font-size: 0.84rem;
@@ -1895,7 +1986,7 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .resume-status {
-  margin-left: auto;
+  margin-left: 2px;
   font-size: 0.78rem;
   font-weight: 500;
 }
@@ -1903,6 +1994,20 @@ input[type="range"]::-moz-range-thumb {
 .resume-status.loading { color: var(--text-muted); }
 .resume-status.success { color: var(--success); }
 .resume-status.error { color: var(--danger); }
+
+.resume-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: var(--space-md);
+}
+
+.resume-enhance-panel {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 
 /* ═══════════════════════════════════════════════════════
    BOOKMARK BUTTON

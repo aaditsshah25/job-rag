@@ -56,16 +56,18 @@
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         <span>Drop your resume PDF here or <label for="resumeFile" class="resume-link">browse</label></span>
         <input type="file" id="resumeFile" accept=".pdf" style="display:none" />
-        <span id="resumeStatus" class="resume-status"></span>
       </div>
 
-      <!-- Resume Enhancement Panel (revealed after upload) -->
-      <div id="resume-enhance-panel" class="resume-enhance-panel hidden">
-        <button type="button" id="enhanceResumeBtn" class="btn-enhance-resume">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-          Analyze &amp; Enhance Resume
-        </button>
-        <span id="enhanceStatus" class="enhance-status"></span>
+      <div class="resume-meta-row">
+        <span id="resumeStatus" class="resume-status"></span>
+        <!-- Resume Enhancement Panel (revealed after upload) -->
+        <div id="resume-enhance-panel" class="resume-enhance-panel hidden">
+          <button type="button" id="enhanceResumeBtn" class="btn-enhance-resume">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+            Analyze Resume
+          </button>
+          <span id="enhanceStatus" class="enhance-status"></span>
+        </div>
       </div>
 
       <form id="profile-form" autocomplete="off">
@@ -112,6 +114,18 @@
                 <option value="On-site">On-site</option>
               </select>
             </div>
+          </div>
+        </div>
+
+        <!-- Skills -->
+        <div class="form-row">
+          <div class="form-group">
+            <label for="skillsInput">Key Skills</label>
+            <div class="tag-input-container" id="skillsTagContainer">
+              <input type="text" class="tag-input-field" id="skillsInput" placeholder="Type a skill and press Enter" list="skillsList" autocomplete="off" />
+            </div>
+            <datalist id="skillsList"></datalist>
+            <span class="field-hint">Extracted from resume, and you can add/remove manually</span>
           </div>
         </div>
 
