@@ -74,6 +74,21 @@ function showAppAfterAuth(user) {
   if (nameField && !nameField.value && user?.name) nameField.value = user.name;
 }
 
+async function resolveGoogleClientId() {
+  if (CONFIG.GOOGLE_CLIENT_ID) return CONFIG.GOOGLE_CLIENT_ID;
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/auth/config', {
+      method: 'GET',
+      headers: AUTH.headers(),
+    });
+    if (!res.ok) return '';
+    const data = await res.json();
+    return (data.googleClientId || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 async function handleGoogleCredential(credentialResponse) {
   setAuthStatus('Signing you in...');
   try {
@@ -97,7 +112,7 @@ async function handleGoogleCredential(credentialResponse) {
   }
 }
 
-function initGoogleGate() {
+async function initGoogleGate() {
   if (AUTH.isAuthenticated()) {
     showAppAfterAuth(AUTH.getUser());
     return;
@@ -106,7 +121,8 @@ function initGoogleGate() {
   document.getElementById('auth-gate')?.classList.remove('hidden');
   document.getElementById('app-shell')?.classList.add('hidden');
 
-  if (!CONFIG.GOOGLE_CLIENT_ID) {
+  const clientId = await resolveGoogleClientId();
+  if (!clientId) {
     setAuthStatus('Google SSO is not configured. Please set GOOGLE_CLIENT_ID.');
     return;
   }
@@ -117,7 +133,7 @@ function initGoogleGate() {
       return;
     }
     window.google.accounts.id.initialize({
-      client_id: CONFIG.GOOGLE_CLIENT_ID,
+      client_id: clientId,
       callback: handleGoogleCredential,
       auto_select: false,
       cancel_on_tap_outside: false,

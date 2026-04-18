@@ -1123,6 +1123,14 @@ async def health():
     return {"status": "ok", "version": "2.0.0"}
 
 
+@app.get("/auth/config")
+async def auth_config():
+    return {
+        "googleClientId": GOOGLE_CLIENT_ID,
+        "googleAuthEnabled": bool(GOOGLE_CLIENT_ID),
+    }
+
+
 @app.post("/webhook", response_model=WebhookResponse, dependencies=[Depends(verify_api_key)])
 @limiter.limit("10/minute")
 async def webhook(request: Request):
