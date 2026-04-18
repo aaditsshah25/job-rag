@@ -1,11 +1,8 @@
 {
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
-  "framework": "vite",
-  "rewrites": [
-    { "source": "/app/(.*)", "destination": "/app/$1" },
-    { "source": "/app", "destination": "/app/index.html" },
-    { "source": "/(.*)", "destination": "/index.html" }
+  "version": 2,
+  "outputDirectory": "frontend",
+  "routes": [
+    { "src": "/(.*)", "dest": "/$1" }
   ],
   "headers": [
     {

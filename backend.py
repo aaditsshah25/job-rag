@@ -271,7 +271,8 @@ async def lifespan(app: FastAPI):
 # ─── FastAPI App ──────────────────────────────────────
 app = FastAPI(title="JobMatch AI Backend", version="2.0.0", lifespan=lifespan)
 
-REACT_FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend-react", "dist")
+FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
+REACT_FRONTEND_DIR = FRONTEND_DIR  # kept for any remaining references
 
 if _SLOWAPI_AVAILABLE:
     app.state.limiter = limiter
@@ -1899,42 +1900,14 @@ async def get_resume_tailoring(session_id: str):
     return {"tailoring": result}
 
 
-if os.path.isdir(REACT_FRONTEND_DIR):
-    REACT_INDEX_FILE = os.path.join(REACT_FRONTEND_DIR, "index.html")
-    REACT_ASSETS_DIR = os.path.join(REACT_FRONTEND_DIR, "assets")
-    LEGACY_FRONTEND_DIR = os.path.join(REACT_FRONTEND_DIR, "app")
-    REACT_PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "frontend-react", "public")
-    REACT_FAVICON_FILE = os.path.join(REACT_PUBLIC_DIR, "favicon.svg")
-
-    @app.get("/react")
-    async def react_root_redirect():
-        return RedirectResponse(url="/")
-
-    @app.get("/app")
-    async def app_entry():
-        return RedirectResponse(url="/dashboard/")
-
-    @app.get("/app/")
-    async def app_entry_slash():
-        return RedirectResponse(url="/dashboard/")
-
-    if os.path.isdir(REACT_ASSETS_DIR):
-        app.mount("/assets", StaticFiles(directory=REACT_ASSETS_DIR), name="frontend-react-assets")
-    if os.path.isdir(LEGACY_FRONTEND_DIR):
-        app.mount("/dashboard", StaticFiles(directory=LEGACY_FRONTEND_DIR, html=True), name="legacy-dashboard")
-
-    @app.get("/favicon.ico")
-    async def favicon_ico():
-        if os.path.isfile(REACT_FAVICON_FILE):
-            return FileResponse(REACT_FAVICON_FILE, media_type="image/svg+xml")
-        return Response(status_code=204)
-
-    @app.get("/")
-    async def react_root():
-        return FileResponse(REACT_INDEX_FILE)
+# ── Serve frontend/ at / and /dashboard ───────────────────────────────────
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/dashboard", StaticFiles(directory=FRONTEND_DIR, html=True), name="dashboard")
+    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="root")
+    log.info("Frontend mounted at / and /dashboard from %s", FRONTEND_DIR)
 else:
-    log.warning("React frontend not mounted because directory was not found: %s", REACT_FRONTEND_DIR)
+    log.warning("Frontend directory not found: %s", FRONTEND_DIR)
 
     @app.get("/")
     async def root_fallback():
-        return {"status": "ok", "detail": "React frontend assets are not available on this deployment."}
+        return {"status": "ok", "version": "2.0.0"}
