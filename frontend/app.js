@@ -608,8 +608,10 @@ const closeCoverLetterBtn = document.getElementById('closeCoverLetterBtn');
 const copyCoverLetter = document.getElementById('copyCoverLetter');
 const openGmailDraftBtn = document.getElementById('openGmailDraftBtn');
 
-function openCoverLetterModal(text) {
+function openCoverLetterModal(text, recruiterEmail) {
   if (coverLetterContent) coverLetterContent.textContent = text;
+  const emailInput = document.getElementById('recruiterEmailInput');
+  if (emailInput) emailInput.value = recruiterEmail || '';
   if (coverLetterModal) coverLetterModal.classList.remove('hidden');
 }
 
@@ -640,14 +642,11 @@ openGmailDraftBtn?.addEventListener('click', () => {
 
   const fullName = document.getElementById('fullName')?.value?.trim() || 'Candidate';
   const jobTitle = currentCoverLetterContext?.jobTitle || 'the role';
-  const company = currentCoverLetterContext?.company || 'the company';
-  let recruiterEmail = (currentCoverLetterContext?.recruiterEmail || '').trim();
-  if (!recruiterEmail) {
-    const entered = prompt('Enter recruiter email (optional):', '');
-    recruiterEmail = (entered || '').trim();
-  }
+  const recruiterEmail = (document.getElementById('recruiterEmailInput')?.value || '').trim();
+
   if (recruiterEmail && !looksLikeEmail(recruiterEmail)) {
-    alert('That email address looks invalid. Please try again.');
+    alert('That recruiter email address looks invalid. Please correct it or leave it blank.');
+    document.getElementById('recruiterEmailInput')?.focus();
     return;
   }
 
@@ -857,7 +856,7 @@ async function generateCoverLetter(jobTitle, company, jobDescription, recruiterE
       recruiterEmail: recruiterEmail || '',
       body: coverLetterText,
     };
-    openCoverLetterModal(coverLetterText);
+    openCoverLetterModal(coverLetterText, recruiterEmail);
   } catch (err) {
     currentCoverLetterContext = null;
     if (coverLetterContent) coverLetterContent.textContent = 'Error: ' + err.message;
