@@ -19,6 +19,7 @@ import re
 import json
 import math
 import ast
+import html
 import asyncio
 import logging
 import hashlib
@@ -37,7 +38,7 @@ import pandas as pd
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -482,6 +483,53 @@ def _safe_json_loads(raw: str, default):
         return json.loads(raw)
     except Exception:
         return default
+
+
+def _is_valid_email(email_address: str) -> bool:
+    if not email_address:
+        return False
+    return bool(re.fullmatch(r"(?i)[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}", email_address.strip()))
+
+
+def _email_service_status() -> dict:
+    missing = []
+    if not RESEND_API_KEY:
+        missing.append("RESEND_API_KEY")
+    if not _RESEND_AVAILABLE:
+        missing.append("resend package")
+    if not _is_valid_email(FROM_EMAIL):
+        missing.append("FROM_EMAIL")
+    return {
+        "provider": "resend",
+        "configured": len(missing) == 0,
+        "resend_package_available": _RESEND_AVAILABLE,
+        "from_email": FROM_EMAIL,
+        "missing": missing,
+    }
+
+
+def _markdown_to_email_html(markdown: str) -> str:
+    lines = (markdown or "").splitlines()
+    out = []
+    for raw_line in lines:
+        line = raw_line.rstrip()
+        if not line:
+            out.append("<br>")
+            continue
+        if line.startswith("### "):
+            out.append(f"<h3>{html.escape(line[4:])}</h3>")
+            continue
+        if line.startswith("## "):
+            out.append(f"<h2>{html.escape(line[3:])}</h2>")
+            continue
+        if line.startswith("# "):
+            out.append(f"<h1>{html.escape(line[2:])}</h1>")
+            continue
+        escaped = html.escape(line)
+        # Convert markdown bold after escaping to avoid injecting HTML.
+        converted = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+        out.append(f"<p>{converted}</p>")
+    return "\n".join(out)
 
 
 def _parse_model_json_or_default(raw: str, default, context: str):
@@ -1409,38 +1457,36 @@ async def submit_feedback(req: FeedbackRequest):
     return {"status": "ok"}
 
 
+@app.get("/email/status", dependencies=[Depends(verify_api_key)])
+async def email_status():
+    return _email_service_status()
+
+
 @app.post("/send-results", dependencies=[Depends(verify_api_key)])
 async def send_results(req: SendResultsRequest):
-    if not RESEND_API_KEY:
-        raise HTTPException(status_code=503, detail="Email service not configured")
-    if not _RESEND_AVAILABLE:
-        raise HTTPException(status_code=503, detail="resend package is not installed on this server")
+    status = _email_service_status()
+    if not status["configured"]:
+        missing = ", ".join(status["missing"]) if status["missing"] else "unknown configuration"
+        raise HTTPException(status_code=503, detail=f"Email service not configured: {missing}")
+
+    recipient = (req.email or "").strip().lower()
+    recipient_name = (req.name or "").strip() or "there"
+    if not _is_valid_email(recipient):
+        raise HTTPException(status_code=422, detail="Please provide a valid recipient email address")
+    if not (req.results_markdown or "").strip():
+        raise HTTPException(status_code=422, detail="No results available to email")
+
     try:
         resend_lib.api_key = RESEND_API_KEY
-        # Convert markdown to basic HTML for email
-        def _md_to_html(md: str) -> str:
-            lines = md.splitlines()
-            out = []
-            for line in lines:
-                if line.startswith("### "):
-                    out.append(f"<h3>{line[4:]}</h3>")
-                elif line.startswith("## "):
-                    out.append(f"<h2>{line[3:]}</h2>")
-                elif line.startswith("# "):
-                    out.append(f"<h1>{line[2:]}</h1>")
-                else:
-                    # Bold: replace **text** with <strong>text</strong>
-                    converted = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
-                    out.append(converted if converted.strip() else "<br>")
-            return "<br>".join(out)
-        html_body = _md_to_html(req.results_markdown)
+        html_body = _markdown_to_email_html(req.results_markdown)
         resend_lib.Emails.send({
             "from": FROM_EMAIL,
-            "to": req.email,
-            "subject": f"Your JobMatch AI Results \u2014 {req.name}",
-            "html": f"<p>Hi {req.name},</p><p>Here are your job matches:</p><br>{html_body}",
+            "to": recipient,
+            "subject": f"Your JobMatch AI Results \u2014 {recipient_name}",
+            "html": f"<p>Hi {html.escape(recipient_name)},</p><p>Here are your job matches:</p>{html_body}",
+            "text": f"Hi {recipient_name},\n\nHere are your job matches:\n\n{req.results_markdown}",
         })
-        return {"status": "sent"}
+        return {"status": "sent", "to": recipient, "provider": status["provider"]}
     except Exception as e:
         log.exception("Email send failed")
         raise HTTPException(status_code=500, detail=f"Failed to send email: {e}")
@@ -1809,6 +1855,7 @@ async def get_resume_tailoring(session_id: str):
 if os.path.isdir(REACT_FRONTEND_DIR):
     REACT_INDEX_FILE = os.path.join(REACT_FRONTEND_DIR, "index.html")
     REACT_ASSETS_DIR = os.path.join(REACT_FRONTEND_DIR, "assets")
+    LEGACY_FRONTEND_DIR = os.path.join(REACT_FRONTEND_DIR, "app")
     REACT_PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "frontend-react", "public")
     REACT_FAVICON_FILE = os.path.join(REACT_PUBLIC_DIR, "favicon.svg")
 
@@ -1818,14 +1865,16 @@ if os.path.isdir(REACT_FRONTEND_DIR):
 
     @app.get("/app")
     async def app_entry():
-        return FileResponse(REACT_INDEX_FILE)
+        return RedirectResponse(url="/dashboard/")
 
     @app.get("/app/")
     async def app_entry_slash():
-        return FileResponse(REACT_INDEX_FILE)
+        return RedirectResponse(url="/dashboard/")
 
     if os.path.isdir(REACT_ASSETS_DIR):
         app.mount("/assets", StaticFiles(directory=REACT_ASSETS_DIR), name="frontend-react-assets")
+    if os.path.isdir(LEGACY_FRONTEND_DIR):
+        app.mount("/dashboard", StaticFiles(directory=LEGACY_FRONTEND_DIR, html=True), name="legacy-dashboard")
 
     @app.get("/favicon.ico")
     async def favicon_ico():

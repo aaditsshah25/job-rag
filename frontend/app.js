@@ -55,6 +55,42 @@ const skillsInput = document.getElementById('skillsInput');
 const skillsHidden = document.getElementById('skills');
 
 const applicationStatusByKey = new Map();
+let emailServiceReady = null;
+let emailServiceIssue = '';
+
+function looksLikeEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim());
+}
+
+async function checkEmailServiceStatus() {
+  const headers = AUTH.headers();
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/email/status', { method: 'GET', headers });
+    if (!res.ok) {
+      emailServiceReady = false;
+      emailServiceIssue = `Email status check failed (${res.status})`;
+      if (emailResultsBtn) {
+        emailResultsBtn.disabled = true;
+        emailResultsBtn.title = emailServiceIssue;
+      }
+      return;
+    }
+    const data = await res.json();
+    emailServiceReady = !!data.configured;
+    emailServiceIssue = (data.missing || []).join(', ');
+    if (emailResultsBtn) {
+      emailResultsBtn.disabled = !emailServiceReady;
+      emailResultsBtn.title = emailServiceReady ? '' : `Email unavailable: ${emailServiceIssue || 'configuration missing'}`;
+    }
+  } catch (err) {
+    emailServiceReady = false;
+    emailServiceIssue = err.message || 'Unknown email service error';
+    if (emailResultsBtn) {
+      emailResultsBtn.disabled = true;
+      emailResultsBtn.title = `Email unavailable: ${emailServiceIssue}`;
+    }
+  }
+}
 
 // ─── DARK MODE TOGGLE ────────────────────────────────
 const darkModeToggle = document.getElementById('darkModeToggle');
@@ -329,11 +365,23 @@ if (emailResultsBtn) {
   emailResultsBtn.addEventListener('click', async () => {
     const emailVal = document.getElementById('email').value.trim();
     const nameVal = document.getElementById('fullName').value.trim();
+    if (emailServiceReady === false) {
+      alert(`Email service is not ready. Missing: ${emailServiceIssue || 'configuration'}`);
+      return;
+    }
     if (!emailVal) {
       alert('Please enter your email address in the form before sending results.');
       return;
     }
+    if (!looksLikeEmail(emailVal)) {
+      alert('Please enter a valid email address.');
+      return;
+    }
     const resultsMarkdown = resultsContent.innerText || resultsContent.textContent || '';
+    if (!resultsMarkdown.trim()) {
+      alert('No results available to send yet.');
+      return;
+    }
     const headers = AUTH.headers();
     try {
       emailResultsBtn.disabled = true;
@@ -359,6 +407,8 @@ if (emailResultsBtn) {
     }
   });
 }
+
+checkEmailServiceStatus();
 
 
 // ─── RESUME UPLOAD ───────────────────────────────────
