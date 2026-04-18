@@ -64,7 +64,14 @@ function setAuthStatus(msg) {
   if (el) el.textContent = msg || '';
 }
 
+function setLandingHidden(isHidden) {
+  document.querySelectorAll('[data-landing]').forEach((section) => {
+    section.classList.toggle('landing-hidden', !!isHidden);
+  });
+}
+
 function showAppAfterAuth(user) {
+  setLandingHidden(true);
   document.getElementById('auth-gate')?.classList.add('hidden');
   document.getElementById('app-shell')?.classList.remove('hidden');
   updateHeaderAccount(user);
@@ -101,6 +108,7 @@ function updateHeaderAccount(user) {
 
 function signOut() {
   AUTH.clearSession();
+  setLandingHidden(false);
   document.getElementById('app-shell')?.classList.add('hidden');
   document.getElementById('auth-gate')?.classList.remove('hidden');
   document.getElementById('accountChip')?.classList.add('hidden');
@@ -151,6 +159,7 @@ async function initGoogleGate() {
     return;
   }
 
+  setLandingHidden(false);
   document.getElementById('auth-gate')?.classList.remove('hidden');
   document.getElementById('app-shell')?.classList.add('hidden');
 
