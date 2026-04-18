@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=4" />
+  <link rel="stylesheet" href="style.css?v=5" />
   <style>
     .required-star {
       color: #ef4444;
@@ -23,11 +23,23 @@
 
 <body>
 
+  <header id="landing-topbar" data-landing>
+    <div class="landing-topbar-inner">
+      <a href="#landing-hero" class="landing-brand-link">JobMatch<span>AI</span></a>
+      <nav class="landing-topbar-nav" aria-label="Landing navigation">
+        <a href="#landing-features">Features</a>
+        <a href="#landing-how">How It Works</a>
+        <a href="#landing-cta">Get Started</a>
+      </nav>
+      <a class="landing-nav-cta" href="#auth-gate">Sign In</a>
+    </div>
+  </header>
+
   <section id="landing-hero" data-landing>
     <div class="landing-hero-inner">
       <h1>Land your dream job with AI</h1>
       <p>JobMatchAI uses RAG to match your resume to real openings, generate tailored cover letters, and suggest high-impact resume improvements.</p>
-      <a class="landing-scroll-btn" href="#auth-gate">Get Started &mdash; it's free</a>
+      <a class="landing-scroll-btn js-auth-trigger" href="#auth-gate">Get Started &mdash; it's free</a>
     </div>
   </section>
 
@@ -101,12 +113,13 @@
   <section id="landing-cta" data-landing>
     <div class="landing-section-inner">
       <h2>Ready to get started?</h2>
-      <a class="landing-cta-btn" href="#auth-gate">Get Started &mdash; it's free</a>
+      <a class="landing-cta-btn js-auth-trigger" href="#auth-gate">Get Started &mdash; it's free</a>
     </div>
   </section>
 
-  <section id="auth-gate">
+  <section id="auth-gate" class="hidden">
     <div class="auth-card">
+      <button type="button" id="authCloseBtn" class="auth-close-btn" aria-label="Close sign-in">&times;</button>
       <div class="auth-logo">
         <span class="logo-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
         <span>JobMatchAI</span>
@@ -417,7 +430,7 @@
   <script src="config.js?v=3"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="data.js?v=3"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 
 </html>

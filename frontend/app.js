@@ -70,9 +70,20 @@ function setLandingHidden(isHidden) {
   });
 }
 
+function setAuthGateVisible(isVisible) {
+  const gate = document.getElementById('auth-gate');
+  if (!gate) return;
+  gate.classList.toggle('hidden', !isVisible);
+  document.body.classList.toggle('auth-open', !!isVisible);
+}
+
+function revealAuthGate({ scroll = true } = {}) {
+  setAuthGateVisible(true);
+}
+
 function showAppAfterAuth(user) {
   setLandingHidden(true);
-  document.getElementById('auth-gate')?.classList.add('hidden');
+  setAuthGateVisible(false);
   document.getElementById('app-shell')?.classList.remove('hidden');
   updateHeaderAccount(user);
 
@@ -110,7 +121,7 @@ function signOut() {
   AUTH.clearSession();
   setLandingHidden(false);
   document.getElementById('app-shell')?.classList.add('hidden');
-  document.getElementById('auth-gate')?.classList.remove('hidden');
+  setAuthGateVisible(false);
   document.getElementById('accountChip')?.classList.add('hidden');
   setAuthStatus('Signed out. Please sign in with Google to continue.');
 }
@@ -160,7 +171,7 @@ async function initGoogleGate() {
   }
 
   setLandingHidden(false);
-  document.getElementById('auth-gate')?.classList.remove('hidden');
+  setAuthGateVisible(false);
   document.getElementById('app-shell')?.classList.add('hidden');
 
   const clientId = await resolveGoogleClientId();
@@ -200,6 +211,29 @@ async function initGoogleGate() {
 }
 
 initGoogleGate();
+
+document.querySelectorAll('.js-auth-trigger, .landing-nav-cta').forEach((trigger) => {
+  trigger.addEventListener('click', (event) => {
+    event.preventDefault();
+    revealAuthGate();
+  });
+});
+
+document.getElementById('authCloseBtn')?.addEventListener('click', () => {
+  setAuthGateVisible(false);
+});
+
+document.getElementById('auth-gate')?.addEventListener('click', (event) => {
+  if (event.target && event.target.id === 'auth-gate') {
+    setAuthGateVisible(false);
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    setAuthGateVisible(false);
+  }
+});
 
 document.getElementById('signOutBtn')?.addEventListener('click', signOut);
 
