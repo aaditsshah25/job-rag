@@ -3,6 +3,24 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'path';
 import fs from 'fs';
 
+function sanitizeEnv(value, fallback = '') {
+  return String(value ?? fallback).trim();
+}
+
+function escapeJsString(value) {
+  return value.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function writeLegacyRuntimeConfig(dest) {
+  const apiUrl = sanitizeEnv(process.env.JOBMATCH_API_URL, process.env.VITE_API_BASE_URL || 'http://localhost:8000');
+  const apiKey = sanitizeEnv(process.env.JOBMATCH_API_KEY, '');
+  const googleClientId = sanitizeEnv(process.env.GOOGLE_CLIENT_ID, '');
+
+  const configContent = `// JobMatch AI - Runtime Configuration (generated at build time)\nconst CONFIG = {\n  API_BASE_URL: '${escapeJsString(apiUrl)}',\n  API_KEY: '${escapeJsString(apiKey)}',\n  GOOGLE_CLIENT_ID: '${escapeJsString(googleClientId)}',\n};\n`;
+
+  fs.writeFileSync(resolve(dest, 'config.js'), configContent, 'utf8');
+}
+
 // Plugin to copy the static HTML app into dist/app after build
 function copyHtmlApp() {
   return {
@@ -11,6 +29,7 @@ function copyHtmlApp() {
       const src = resolve(__dirname, '../frontend');
       const dest = resolve(__dirname, 'dist/app');
       copyDir(src, dest);
+      writeLegacyRuntimeConfig(dest);
     },
   };
 }

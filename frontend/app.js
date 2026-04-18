@@ -645,6 +645,8 @@ async function loadApplicationsForSession() {
   }
 }
 
+const STATUS_LABELS = { saved: 'saved', applied: 'applied', oa: 'online assessment', interview: 'interview', offer: 'offer', rejected: 'rejected' };
+
 function applyApplicationStatusesToUI() {
   document.querySelectorAll('.card-apply-btn').forEach((btn) => {
     const title = btn.getAttribute('data-app-title') || '';
@@ -652,7 +654,7 @@ function applyApplicationStatusesToUI() {
     const state = applicationStatusByKey.get(appKey(title, company));
     const status = state?.status || 'saved';
     btn.setAttribute('data-app-status', status);
-    btn.textContent = `Status: ${status}`;
+    btn.textContent = `Status: ${STATUS_LABELS[status] || status}`;
   });
 }
 
@@ -730,13 +732,13 @@ function cleanResponse(text) {
 
 // ─── CLEAN BULLET TEXT ──────────────────────────────
 function cleanBulletText(text) {
-  let t = text.replace(/^[-*•â€¢]\s*/, '').replace(/\*\*/g, '').trim();
+  let t = text.replace(/^[-*•]\s*/, '').replace(/\*\*/g, '').trim();
   t = t.replace(/^(Most important next step|Skill to highlight or develop|Question to ask recruiters?|Highlight or develop):\s*/i, '');
   return t;
 }
 
 function isBulletLine(text) {
-  return /^[-*•â€¢]\s+/.test((text || '').trim());
+  return /^[-*•]\s+/.test((text || '').trim());
 }
 
 
@@ -1228,7 +1230,7 @@ function renderBasicContent(text) {
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
   html = html.replace(/^---$/gm, '<hr />');
-  html = html.replace(/^[-*•â€¢] (.+)$/gm, '<li>$1</li>');
+  html = html.replace(/^[-*•] (.+)$/gm, '<li>$1</li>');
   html = html.replace(/^\d+[.\)] (.+)$/gm, '<li>$1</li>');
   html = html.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
   html = html.split(/\n\n+/).map(block => {

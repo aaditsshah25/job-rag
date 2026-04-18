@@ -24,16 +24,20 @@ import logging
 import hashlib
 import uuid
 import io
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlencode
+from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import URLError, HTTPError
 
 import pandas as pd
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -100,7 +104,10 @@ JOBMATCH_API_KEY  = os.getenv("JOBMATCH_API_KEY", "")
 RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
 GOOGLE_CLIENT_ID  = os.getenv("GOOGLE_CLIENT_ID", "")
-JWT_SECRET        = os.getenv("JWT_SECRET", "")
+JWT_SECRET        = os.getenv("JWT_SECRET", "").strip()
+if not JWT_SECRET:
+    JWT_SECRET = os.getenv("JWT_SECRET_FALLBACK", "jobmatch-local-dev-secret")
+    log.warning("JWT_SECRET is not configured; using insecure development fallback. Set JWT_SECRET in .env for production.")
 JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
@@ -263,7 +270,6 @@ async def lifespan(app: FastAPI):
 # ─── FastAPI App ──────────────────────────────────────
 app = FastAPI(title="JobMatch AI Backend", version="2.0.0", lifespan=lifespan)
 
-FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend")
 REACT_FRONTEND_DIR = os.path.join(os.path.dirname(__file__), "frontend-react", "dist")
 
 if _SLOWAPI_AVAILABLE:
@@ -477,6 +483,14 @@ def _safe_json_loads(raw: str, default):
     except Exception:
         return default
 
+
+def _parse_model_json_or_default(raw: str, default, context: str):
+    try:
+        return json.loads(raw)
+    except Exception as exc:
+        log.warning("Invalid model JSON in %s: %s", context, exc)
+        return default
+
 def _env_flag(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -486,8 +500,6 @@ def _env_flag(name: str, default: bool = False) -> bool:
 def _create_access_token(email: str, name: str, picture: str) -> str:
     if not _PYJWT_AVAILABLE:
         raise HTTPException(status_code=503, detail="PyJWT is not installed on this server")
-    if not JWT_SECRET:
-        raise HTTPException(status_code=503, detail="JWT_SECRET is not configured on this server")
     payload = {
         "sub": email,
         "name": name,
@@ -497,20 +509,37 @@ def _create_access_token(email: str, name: str, picture: str) -> str:
     return pyjwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def _verify_google_credential(credential: str) -> dict:
-    if not _GOOGLE_AUTH_AVAILABLE:
-        raise HTTPException(status_code=503, detail="google-auth is not installed on this server")
+    if not credential:
+        raise HTTPException(status_code=401, detail="Google credential is missing")
+
+    if _GOOGLE_AUTH_AVAILABLE:
+        try:
+            audience = GOOGLE_CLIENT_ID or None
+            token_payload = google_id_token.verify_oauth2_token(
+                credential,
+                google_requests.Request(),
+                audience=audience,
+            )
+            if GOOGLE_CLIENT_ID and token_payload.get("aud") != GOOGLE_CLIENT_ID:
+                raise HTTPException(status_code=401, detail="Google credential audience mismatch")
+            return token_payload
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
     try:
-        audience = GOOGLE_CLIENT_ID or None
-        token_payload = google_id_token.verify_oauth2_token(
-            credential,
-            google_requests.Request(),
-            audience=audience,
+        request = UrlRequest(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {credential}"},
         )
-    except Exception:
+        with urlopen(request, timeout=10) as response:
+            token_payload = json.loads(response.read().decode("utf-8"))
+        if not isinstance(token_payload, dict):
+            raise ValueError("Invalid Google userinfo payload")
+        return token_payload
+    except (HTTPError, URLError, ValueError, json.JSONDecodeError):
         raise HTTPException(status_code=401, detail="Invalid Google credential")
-    if GOOGLE_CLIENT_ID and token_payload.get("aud") != GOOGLE_CLIENT_ID:
-        raise HTTPException(status_code=401, detail="Google credential audience mismatch")
-    return token_payload
 
 def clean_row(row) -> dict:
     profile = _parse_company_profile(_safe_str(row.get("Company Profile", "")))
@@ -583,8 +612,27 @@ def get_or_create_index():
     return client.Index(PINECONE_INDEX)
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    resp = get_openai().embeddings.create(model=EMBED_MODEL, input=texts)
-    return [r.embedding for r in resp.data]
+    # Retry transient provider errors (timeouts/rate limits) to keep indexing resilient.
+    max_attempts = 3
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = get_openai().embeddings.create(model=EMBED_MODEL, input=texts)
+            return [r.embedding for r in resp.data]
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            backoff_seconds = 1.5 ** attempt
+            log.warning(
+                "Embedding request failed (attempt %d/%d): %s; retrying in %.1fs",
+                attempt,
+                max_attempts,
+                exc,
+                backoff_seconds,
+            )
+            time.sleep(backoff_seconds)
+    raise RuntimeError(f"Embedding failed after {max_attempts} attempts: {last_error}")
 
 def index_dataset(force: bool = False) -> int:
     global _last_source_stats
@@ -640,7 +688,6 @@ def index_dataset(force: bool = False) -> int:
     EMBED_BATCH = 96
     UPSERT_BATCH = 100
     batches = [jobs[i: i + EMBED_BATCH] for i in range(0, len(jobs), EMBED_BATCH)]
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     all_vectors = []
 
     def embed_batch(batch_and_offset):
@@ -698,21 +745,157 @@ def _parse_salary_min_from_query(query: str) -> float:
         return float(m.group(1)) * 1000
     return 0.0
 
-def search_jobs(query: str, top_k: int = TOP_K) -> list[dict]:
-    index = get_or_create_index()
-    [query_emb] = embed_texts([query])
-    salary_min = _parse_salary_min_from_query(query)
-    pinecone_filter = None
-    if salary_min > 0:
-        pinecone_filter = {"salary_min": {"$gte": salary_min}}
-    results = index.query(vector=query_emb, top_k=top_k, include_metadata=True, filter=pinecone_filter)
-    return [{"score": round(m.score, 4), **m.metadata} for m in results.matches]
 
-def search_jobs_cached(query: str, top_k: int = TOP_K) -> list[dict]:
-    key = hashlib.md5(f"{query}{top_k}".encode()).hexdigest()
+def _tokenize_query(query: str) -> list[str]:
+    tokens = re.findall(r"[a-zA-Z0-9+#.]{2,}", (query or "").lower())
+    stop = {
+        "the", "and", "for", "with", "from", "that", "this", "your", "have", "into",
+        "jobs", "job", "role", "show", "find", "need", "want", "looking", "work", "remote",
+    }
+    return [t for t in tokens if t not in stop]
+
+
+def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
+    if not os.path.exists(CSV_PATH):
+        return []
+    try:
+        df = pd.read_csv(CSV_PATH)
+    except Exception:
+        return []
+
+    tokens = _tokenize_query(query)
+    scored = []
+    for i in range(len(df)):
+        job = clean_row(df.iloc[i])
+        text = " ".join([
+            job.get("title", ""),
+            job.get("role", ""),
+            job.get("company", ""),
+            job.get("location", ""),
+            job.get("country", ""),
+            job.get("description", ""),
+            " ".join(job.get("skills", [])[:20]),
+            job.get("industry", ""),
+            job.get("sector", ""),
+        ]).lower()
+        if not tokens:
+            score = 0.1
+        else:
+            score = sum(1 for t in tokens if t in text) / max(len(tokens), 1)
+        if score > 0:
+            scored.append({"score": round(float(score), 4), **job, "source": "local_csv_fallback"})
+
+    scored.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return scored[: max(1, top_k)]
+
+
+def _parse_pinecone_blob_text(blob_text: str) -> dict:
+    text = _safe_str(blob_text)
+    if not text:
+        return {}
+
+    def _extract(pattern: str) -> str:
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        return _safe_str(match.group(1)) if match else ""
+
+    title = _extract(r"JOB TITLE:\s*(.*?)\s*(?:\n|$)")
+    role = _extract(r"ROLE:\s*(.*?)\s*(?:\n|$)") or title
+    company = _extract(r"COMPANY:\s*(.*?)\s*(?:\n|$)")
+    location = _extract(r"LOCATION:\s*(.*?)\s*(?:\n|$)")
+    work_type = _extract(r"WORK TYPE:\s*(.*?)\s*(?:\n|$)")
+    experience = _extract(r"EXPERIENCE REQUIRED:\s*(.*?)\s*(?:\n|$)")
+    salary = _extract(r"SALARY RANGE:\s*(.*?)\s*(?:\n|$)")
+    qualifications = _extract(r"QUALIFICATIONS:\s*(.*?)\s*(?:\n\w+:|\Z)")
+    description = _extract(r"DESCRIPTION:\s*(.*?)\s*(?:\nRESPONSIBILITIES:|\nSKILLS:|\Z)")
+    responsibilities = _extract(r"RESPONSIBILITIES:\s*(.*?)\s*(?:\nSKILLS:|\Z)")
+    skills = _extract(r"SKILLS:\s*(.*?)\s*(?:\Z)")
+
+    skill_items = [s.strip() for s in re.split(r"[;,\n]", skills) if s.strip()]
+    return {
+        "title": title,
+        "role": role,
+        "company": company,
+        "location": location,
+        "country": "",
+        "work_type": work_type,
+        "salary": salary,
+        "experience": experience,
+        "qualifications": qualifications,
+        "description": description,
+        "responsibilities": responsibilities,
+        "skills": skill_items,
+        "benefits": [],
+        "sector": "",
+        "industry": "",
+        "company_size": "",
+        "source": "pinecone_blob",
+        "external_url": "",
+        "raw_text": text,
+    }
+
+
+def _normalize_pinecone_match(match) -> dict:
+    score = round(float(getattr(match, "score", 0.0) or 0.0), 4)
+    metadata = getattr(match, "metadata", {}) or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    normalized: dict[str, object] = {"score": score}
+
+    if metadata.get("source") == "blob" and metadata.get("text"):
+        normalized.update(_parse_pinecone_blob_text(metadata.get("text", "")))
+    else:
+        normalized.update(metadata)
+
+    normalized.setdefault("title", normalized.get("role", "") or normalized.get("title", ""))
+    normalized.setdefault("role", normalized.get("title", ""))
+    normalized.setdefault("company", "")
+    normalized.setdefault("location", "")
+    normalized.setdefault("country", "")
+    normalized.setdefault("work_type", "")
+    normalized.setdefault("salary", "")
+    normalized.setdefault("experience", "")
+    normalized.setdefault("qualifications", "")
+    normalized.setdefault("description", "")
+    normalized.setdefault("responsibilities", "")
+    normalized.setdefault("skills", [])
+    normalized.setdefault("benefits", [])
+    normalized.setdefault("sector", "")
+    normalized.setdefault("industry", "")
+    normalized.setdefault("company_size", "")
+    normalized.setdefault("source", "pinecone")
+    normalized.setdefault("external_url", "")
+
+    if not isinstance(normalized.get("skills"), list):
+        normalized["skills"] = _parse_skills(_safe_str(normalized.get("skills", "")))
+    if not isinstance(normalized.get("benefits"), list):
+        normalized["benefits"] = _parse_benefits(_safe_str(normalized.get("benefits", "")))
+
+    return normalized
+
+def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
+    if not OPENAI_API_KEY or not PINECONE_API_KEY:
+        return _search_jobs_local_csv(query, top_k)
+
+    try:
+        index = get_or_create_index()
+        [query_emb] = embed_texts([query])
+        # Prefer structured salaryMin from profile; fall back to regex extraction from query text
+        salary_min = float(profile_salary_min) if profile_salary_min else _parse_salary_min_from_query(query)
+        pinecone_filter = None
+        if salary_min > 0:
+            pinecone_filter = {"salary_min": {"$gte": salary_min}}
+        results = index.query(vector=query_emb, top_k=top_k, include_metadata=True, filter=pinecone_filter)
+        return [_normalize_pinecone_match(m) for m in results.matches]
+    except Exception as exc:
+        log.warning("Vector search failed, falling back to local CSV search: %s", exc)
+        return _search_jobs_local_csv(query, top_k)
+
+def search_jobs_cached(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
+    key = hashlib.md5(f"{query}{top_k}{profile_salary_min}".encode()).hexdigest()
     if key in _search_cache:
         return _search_cache[key]
-    result = search_jobs(query, top_k)
+    result = search_jobs(query, top_k, profile_salary_min=profile_salary_min)
     _search_cache[key] = result
     return result
 
@@ -801,6 +984,38 @@ def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
     )
 
 def generate_response(user_query: str, candidates: list[dict], history: list = None) -> str:
+    if not OPENAI_API_KEY:
+        top = candidates[: max(1, TOP_N_RESULTS)]
+        lines = [
+            "# Your Job Match Results",
+            "",
+            "## Summary",
+            f"- Jobs Analyzed: {len(candidates)}",
+            f"- Top Matches: {len(top)}",
+            "",
+            "## Top Job Matches",
+            "",
+        ]
+        for c in top:
+            title = c.get("title", "Unknown Role")
+            company = c.get("company", "Unknown Company")
+            location = ", ".join([x for x in [c.get("location", ""), c.get("country", "")] if x]) or "N/A"
+            salary = c.get("salary", "Not listed")
+            skills = ", ".join(c.get("skills", [])[:6]) or "Not listed"
+            lines.extend([
+                f"### {title} @ {company}",
+                f"- Match Score: {round((c.get('score', 0) or 0) * 10, 1)}/10",
+                f"- Location: {location}",
+                f"- Salary: {salary}",
+                f"- Skills: {skills}",
+                "",
+            ])
+        lines.extend([
+            "## Note",
+            "- Running in basic mode without OpenAI key. Results are keyword-based from the local dataset.",
+        ])
+        return "\n".join(lines)
+
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
     user_msg = build_llm_prompt(user_query, candidates)
     messages = [{"role": "system", "content": system}]
@@ -847,7 +1062,8 @@ async def webhook(request: Request):
 
     session_id = req.sessionId or str(uuid.uuid4())
     history = get_session_history(session_id)
-    candidates = search_jobs_cached(query, top_k=TOP_K)
+    profile_salary_min = req.profile.salaryMin if req.profile else None
+    candidates = search_jobs_cached(query, top_k=TOP_K, profile_salary_min=profile_salary_min)
     if not candidates:
         return WebhookResponse(output="No matching jobs found. Please try different search terms.")
     output = generate_response(query, candidates, history)
@@ -892,7 +1108,7 @@ async def debug_retrieval(request: Request, req: DebugRetrievalRequest):
     }
 
 
-@app.post("/auth/google", dependencies=[Depends(verify_api_key)])
+@app.post("/auth/google")
 async def auth_google(req: GoogleAuthRequest):
     token_payload = await asyncio.to_thread(_verify_google_credential, req.credential)
     email = _safe_str(token_payload.get("email", "")).lower()
@@ -932,6 +1148,8 @@ async def sources_status(_: None = Depends(verify_api_key)):
     }
 
 
+MAX_RESUME_BYTES = int(os.getenv("MAX_RESUME_BYTES", str(8 * 1024 * 1024)))  # 8 MB default
+
 @app.post("/parse-resume", dependencies=[Depends(verify_api_key)])
 async def parse_resume(file: UploadFile = File(...)):
     filename = (file.filename or "").lower()
@@ -940,6 +1158,8 @@ async def parse_resume(file: UploadFile = File(...)):
     if not _PDFPLUMBER_AVAILABLE:
         raise HTTPException(status_code=503, detail="pdfplumber is not installed on this server")
     contents = await file.read()
+    if len(contents) > MAX_RESUME_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_RESUME_BYTES // (1024 * 1024)} MB")
     text = ""
     try:
         with pdfplumber.open(io.BytesIO(contents)) as pdf:
@@ -951,10 +1171,34 @@ async def parse_resume(file: UploadFile = File(...)):
     if not text.strip():
         raise HTTPException(status_code=422, detail="No text could be extracted from PDF")
 
+    if not OPENAI_API_KEY:
+        found_email = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+        known_skills = [
+            "python", "sql", "excel", "power bi", "tableau", "java", "javascript", "react",
+            "node", "machine learning", "deep learning", "nlp", "fastapi", "django", "aws", "azure",
+        ]
+        lower_text = text.lower()
+        extracted_skills = [s for s in known_skills if s in lower_text]
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        possible_name = lines[0][:80] if lines else ""
+        years = re.findall(r"(\d+)\+?\s*(?:years?|yrs?)", lower_text)
+        experience_years = int(years[0]) if years else 0
+        return {
+            "name": possible_name,
+            "skills": extracted_skills,
+            "experience_years": experience_years,
+            "education": "",
+            "recent_role": "",
+            "industries": [],
+            "email": found_email.group(0) if found_email else "",
+            "raw_text": text[:4000],
+            "resume_text": text[:4000],
+            "mode": "basic",
+        }
+
     prompt = f"""Extract structured profile information from this resume text. Return ONLY valid JSON with these exact fields:
 {{
   "name": "full name or empty string",
-  "email": "email address or empty string",
   "skills": ["skill1", "skill2"],
   "experience_years": 0,
   "education": "highest degree or empty string",
@@ -973,16 +1217,11 @@ Resume text:
         response_format={"type": "json_object"},
     )
 
-    try:
-        parsed = json.loads(response.choices[0].message.content)
-    except Exception:
-        parsed = {}
-
-    # Fallback email extraction from raw text if model misses it.
-    if not _safe_str(parsed.get("email")):
-        email_match = re.search(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b", text)
-        if email_match:
-            parsed["email"] = email_match.group(0)
+    parsed = _parse_model_json_or_default(
+        response.choices[0].message.content,
+        {},
+        "parse_resume",
+    )
 
     parsed["raw_text"] = text[:4000]
     parsed["resume_text"] = parsed["raw_text"]  # alias for compatibility
@@ -992,6 +1231,24 @@ Resume text:
 @app.post("/cover-letter", dependencies=[Depends(verify_api_key)])
 async def generate_cover_letter(req: CoverLetterRequest):
     skills_str = ", ".join(req.profile.skills[:10]) if req.profile.skills else "various technical skills"
+    if not OPENAI_API_KEY:
+        applicant = req.profile.name or "the candidate"
+        role = req.jobTitle or "the role"
+        company = req.company or "your company"
+        tone = (req.tone or "professional").strip().lower()
+        opener = {
+            "friendly": f"I am excited to apply for the {role} position at {company}.",
+            "concise": f"I am applying for the {role} role at {company}.",
+        }.get(tone, f"I am writing to express my interest in the {role} position at {company}.")
+        body = (
+            f"{opener}\n\n"
+            f"I bring {max(req.profile.experience, 0)} years of experience and practical skills in {skills_str}. "
+            f"My background aligns well with the responsibilities typically expected for this role. "
+            f"I focus on reliable execution, clear communication, and measurable outcomes.\n\n"
+            f"Thank you for considering {applicant}. I would value the chance to discuss how I can contribute to {company}."
+        )
+        return {"cover_letter": body, "mode": "basic"}
+
     prompt = f"""Write a compelling 3-paragraph cover letter for {req.profile.name or 'the applicant'} applying to the {req.jobTitle} position at {req.company}.
 
 Applicant profile:
@@ -1160,14 +1417,23 @@ async def send_results(req: SendResultsRequest):
         raise HTTPException(status_code=503, detail="resend package is not installed on this server")
     try:
         resend_lib.api_key = RESEND_API_KEY
-        # Convert simple markdown to HTML
-        html_body = (
-            req.results_markdown
-            .replace("\n", "<br>")
-            .replace("**", "<strong>")
-            .replace("# ", "<h2>")
-            .replace("## ", "<h3>")
-        )
+        # Convert markdown to basic HTML for email
+        def _md_to_html(md: str) -> str:
+            lines = md.splitlines()
+            out = []
+            for line in lines:
+                if line.startswith("### "):
+                    out.append(f"<h3>{line[4:]}</h3>")
+                elif line.startswith("## "):
+                    out.append(f"<h2>{line[3:]}</h2>")
+                elif line.startswith("# "):
+                    out.append(f"<h1>{line[2:]}</h1>")
+                else:
+                    # Bold: replace **text** with <strong>text</strong>
+                    converted = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", line)
+                    out.append(converted if converted.strip() else "<br>")
+            return "<br>".join(out)
+        html_body = _md_to_html(req.results_markdown)
         resend_lib.Emails.send({
             "from": FROM_EMAIL,
             "to": req.email,
@@ -1188,6 +1454,8 @@ async def enhance_resume(request: Request, file: UploadFile = File(...)):
     if not _PDFPLUMBER_AVAILABLE:
         raise HTTPException(status_code=503, detail="pdfplumber is not installed on this server")
     contents = await file.read()
+    if len(contents) > MAX_RESUME_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {MAX_RESUME_BYTES // (1024 * 1024)} MB")
     session_id = request.headers.get("X-Session-Id", "")
     text = ""
     try:
@@ -1243,10 +1511,11 @@ Produce 5-8 suggestions ordered by priority (high first). Detect the likely indu
         response_format={"type": "json_object"},
     )
 
-    try:
-        result = json.loads(response.choices[0].message.content)
-    except Exception:
-        result = {"overall_score": 0, "suggestions": [], "ats_tips": [], "industry_tips": [], "score_breakdown": {}}
+    result = _parse_model_json_or_default(
+        response.choices[0].message.content,
+        {"overall_score": 0, "suggestions": [], "ats_tips": [], "industry_tips": [], "score_breakdown": {}},
+        "enhance_resume",
+    )
 
     if session_id:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -1324,10 +1593,9 @@ CANDIDATE RESUME:
         response_format={"type": "json_object"},
     )
 
-    try:
-        result = json.loads(response.choices[0].message.content)
-    except Exception:
-        result = {
+    result = _parse_model_json_or_default(
+        response.choices[0].message.content,
+        {
             "tailored_score": 0,
             "score_rationale": "Analysis could not be completed.",
             "skills_to_add": [],
@@ -1335,7 +1603,9 @@ CANDIDATE RESUME:
             "bullet_rewrites": [],
             "priority_changes": [],
             "keyword_analysis": {"present": [], "missing": [], "nice_to_have": []},
-        }
+        },
+        "tailor_resume",
+    )
 
     if req.session_id:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -1392,16 +1662,17 @@ RESUME TEXT:
         response_format={"type": "json_object"},
     )
 
-    try:
-        return json.loads(response.choices[0].message.content)
-    except Exception:
-        return {
+    return _parse_model_json_or_default(
+        response.choices[0].message.content,
+        {
             "match_percentage": 0,
             "present_keywords": [],
             "missing_keywords": [],
             "nice_to_have": [],
             "category_breakdown": {"technical_skills": 0, "soft_skills": 0, "domain_knowledge": 0},
-        }
+        },
+        "keyword_gap",
+    )
 
 
 @app.post("/compose-recruiter-email", dependencies=[Depends(verify_api_key)])
@@ -1536,29 +1807,38 @@ async def get_resume_tailoring(session_id: str):
 
 
 if os.path.isdir(REACT_FRONTEND_DIR):
+    REACT_INDEX_FILE = os.path.join(REACT_FRONTEND_DIR, "index.html")
+    REACT_ASSETS_DIR = os.path.join(REACT_FRONTEND_DIR, "assets")
+    REACT_PUBLIC_DIR = os.path.join(os.path.dirname(__file__), "frontend-react", "public")
+    REACT_FAVICON_FILE = os.path.join(REACT_PUBLIC_DIR, "favicon.svg")
+
     @app.get("/react")
     async def react_root_redirect():
-        return RedirectResponse(url="/react/")
+        return RedirectResponse(url="/")
 
-    app.mount("/react", StaticFiles(directory=REACT_FRONTEND_DIR, html=True), name="frontend-react")
+    @app.get("/app")
+    async def app_entry():
+        return FileResponse(REACT_INDEX_FILE)
+
+    @app.get("/app/")
+    async def app_entry_slash():
+        return FileResponse(REACT_INDEX_FILE)
+
+    if os.path.isdir(REACT_ASSETS_DIR):
+        app.mount("/assets", StaticFiles(directory=REACT_ASSETS_DIR), name="frontend-react-assets")
+
+    @app.get("/favicon.ico")
+    async def favicon_ico():
+        if os.path.isfile(REACT_FAVICON_FILE):
+            return FileResponse(REACT_FAVICON_FILE, media_type="image/svg+xml")
+        return Response(status_code=204)
+
+    @app.get("/")
+    async def react_root():
+        return FileResponse(REACT_INDEX_FILE)
 else:
     log.warning("React frontend not mounted because directory was not found: %s", REACT_FRONTEND_DIR)
 
-
-@app.get("/app")
-async def app_compat_redirect():
-    return RedirectResponse(url="/")
-
-
-@app.get("/app/")
-async def app_compat_redirect_slash():
-    return RedirectResponse(url="/")
-
-if os.path.isdir(FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
-else:
-    log.warning("Frontend static files not mounted because directory was not found: %s", FRONTEND_DIR)
-
     @app.get("/")
     async def root_fallback():
-        return {"status": "ok", "detail": "Frontend assets are not available on this deployment."}
+        return {"status": "ok", "detail": "React frontend assets are not available on this deployment."}
