@@ -509,26 +509,63 @@ def _email_service_status() -> dict:
 
 
 def _markdown_to_email_html(markdown: str) -> str:
+    def _inline(md_line: str) -> str:
+        escaped = html.escape(md_line.strip())
+        escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+        escaped = re.sub(r"`([^`]+)`", r"<code>\1</code>", escaped)
+        return escaped
+
     lines = (markdown or "").splitlines()
-    out = []
+    out: list[str] = []
+    list_type = None
+    list_items: list[str] = []
+
+    def _flush_list():
+        nonlocal list_type, list_items
+        if not list_type or not list_items:
+            list_type, list_items = None, []
+            return
+        tag = "ul" if list_type == "ul" else "ol"
+        out.append(f"<{tag}>")
+        out.extend(list_items)
+        out.append(f"</{tag}>")
+        list_type, list_items = None, []
+
     for raw_line in lines:
         line = raw_line.rstrip()
-        if not line:
-            out.append("<br>")
+        stripped = line.strip()
+        if not stripped:
+            _flush_list()
             continue
-        if line.startswith("### "):
-            out.append(f"<h3>{html.escape(line[4:])}</h3>")
+
+        bullet_match = re.match(r"^[-*]\s+(.+)$", stripped)
+        ordered_match = re.match(r"^\d+[.)]\s+(.+)$", stripped)
+
+        if bullet_match:
+            if list_type != "ul":
+                _flush_list()
+                list_type = "ul"
+            list_items.append(f"<li>{_inline(bullet_match.group(1))}</li>")
             continue
-        if line.startswith("## "):
-            out.append(f"<h2>{html.escape(line[3:])}</h2>")
+
+        if ordered_match:
+            if list_type != "ol":
+                _flush_list()
+                list_type = "ol"
+            list_items.append(f"<li>{_inline(ordered_match.group(1))}</li>")
             continue
-        if line.startswith("# "):
-            out.append(f"<h1>{html.escape(line[2:])}</h1>")
-            continue
-        escaped = html.escape(line)
-        # Convert markdown bold after escaping to avoid injecting HTML.
-        converted = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
-        out.append(f"<p>{converted}</p>")
+
+        _flush_list()
+        if stripped.startswith("### "):
+            out.append(f"<h3>{_inline(stripped[4:])}</h3>")
+        elif stripped.startswith("## "):
+            out.append(f"<h2>{_inline(stripped[3:])}</h2>")
+        elif stripped.startswith("# "):
+            out.append(f"<h1>{_inline(stripped[2:])}</h1>")
+        else:
+            out.append(f"<p>{_inline(stripped)}</p>")
+
+    _flush_list()
     return "\n".join(out)
 
 
@@ -1479,11 +1516,21 @@ async def send_results(req: SendResultsRequest):
     try:
         resend_lib.api_key = RESEND_API_KEY
         html_body = _markdown_to_email_html(req.results_markdown)
+        email_html = (
+            "<div style='font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#0f172a;'>"
+            f"<p>Hi {html.escape(recipient_name)},</p>"
+            "<p>Here are your latest job matches from JobMatch AI.</p>"
+            "<div style='background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;'>"
+            f"{html_body}"
+            "</div>"
+            "<p style='margin-top:18px;'>Best,<br/>JobMatch AI</p>"
+            "</div>"
+        )
         resend_lib.Emails.send({
             "from": FROM_EMAIL,
             "to": recipient,
             "subject": f"Your JobMatch AI Results \u2014 {recipient_name}",
-            "html": f"<p>Hi {html.escape(recipient_name)},</p><p>Here are your job matches:</p>{html_body}",
+            "html": email_html,
             "text": f"Hi {recipient_name},\n\nHere are your job matches:\n\n{req.results_markdown}",
         })
         return {"status": "sent", "to": recipient, "provider": status["provider"]}

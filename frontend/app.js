@@ -24,6 +24,7 @@ if (!currentSessionId) {
 // ─── RESUME STATE ─────────────────────────────────────
 let lastResumeText = '';
 let lastResumeFile = null;
+let currentCoverLetterContext = null;
 
 // ─── BOOKMARKS (localStorage) ─────────────────────────
 let bookmarkedJobsData = [];
@@ -60,6 +61,71 @@ let emailServiceIssue = '';
 
 function looksLikeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim());
+}
+
+function readListTexts(selector, root = document) {
+  return Array.from(root.querySelectorAll(selector))
+    .map((el) => (el.textContent || '').trim())
+    .filter(Boolean);
+}
+
+function buildResultsEmailMarkdown() {
+  const timestamp = new Date().toLocaleString();
+  const lines = [];
+  const nameVal = document.getElementById('fullName')?.value?.trim();
+  const roleVal = document.getElementById('desiredRole')?.value?.trim();
+
+  lines.push('# JobMatch AI Results');
+  lines.push(`Generated: ${timestamp}`);
+  if (nameVal) lines.push(`Candidate: ${nameVal}`);
+  if (roleVal) lines.push(`Target Role: ${roleVal}`);
+  lines.push('');
+
+  const cards = Array.from(document.querySelectorAll('.job-card'));
+  if (cards.length > 0) {
+    lines.push('## Top Matches');
+    lines.push('');
+    cards.forEach((card, idx) => {
+      const title = card.querySelector('.job-title')?.textContent?.trim() || 'Unknown role';
+      const company = card.querySelector('.job-company')?.textContent?.trim() || '';
+      const score = card.querySelector('.score-num')?.textContent?.trim() || '';
+      const meta = readListTexts('.job-meta .meta-chip', card);
+      const reasons = readListTexts('.reasons-section .job-list li', card);
+      const gaps = readListTexts('.gaps-section .job-list li', card);
+      const actions = readListTexts('.actions-section .action-list li', card);
+
+      lines.push(`### ${idx + 1}. ${title}${company ? ` @ ${company}` : ''}`);
+      if (score) lines.push(`- Match Score: ${score}/10`);
+      if (meta[0]) lines.push(`- Location: ${meta[0]}`);
+      if (meta[1]) lines.push(`- Salary: ${meta[1]}`);
+      if (reasons.length) {
+        lines.push('');
+        lines.push('**Why it matches**');
+        reasons.forEach((item) => lines.push(`- ${item}`));
+      }
+      if (gaps.length) {
+        lines.push('');
+        lines.push('**Gaps**');
+        gaps.forEach((item) => lines.push(`- ${item}`));
+      }
+      if (actions.length) {
+        lines.push('');
+        lines.push('**Recommended next steps**');
+        actions.forEach((item, actionIdx) => lines.push(`${actionIdx + 1}. ${item}`));
+      }
+      lines.push('');
+    });
+  }
+
+  const globalActions = readListTexts('.global-actions-card .global-action-step .step-text');
+  if (globalActions.length) {
+    lines.push('## Overall Recommended Next Steps');
+    globalActions.forEach((item, idx) => lines.push(`${idx + 1}. ${item}`));
+    lines.push('');
+  }
+
+  const rendered = lines.join('\n').trim();
+  return rendered || (resultsContent.innerText || resultsContent.textContent || '').trim();
 }
 
 async function checkEmailServiceStatus() {
@@ -377,7 +443,7 @@ if (emailResultsBtn) {
       alert('Please enter a valid email address.');
       return;
     }
-    const resultsMarkdown = resultsContent.innerText || resultsContent.textContent || '';
+    const resultsMarkdown = buildResultsEmailMarkdown();
     if (!resultsMarkdown.trim()) {
       alert('No results available to send yet.');
       return;
@@ -540,6 +606,7 @@ const coverLetterContent = document.getElementById('coverLetterContent');
 const closeCoverLetter = document.getElementById('closeCoverLetter');
 const closeCoverLetterBtn = document.getElementById('closeCoverLetterBtn');
 const copyCoverLetter = document.getElementById('copyCoverLetter');
+const openGmailDraftBtn = document.getElementById('openGmailDraftBtn');
 
 function openCoverLetterModal(text) {
   if (coverLetterContent) coverLetterContent.textContent = text;
@@ -562,6 +629,33 @@ copyCoverLetter?.addEventListener('click', () => {
     copyCoverLetter.textContent = 'Copied!';
     setTimeout(() => { copyCoverLetter.textContent = 'Copy to Clipboard'; }, 2000);
   });
+});
+
+openGmailDraftBtn?.addEventListener('click', () => {
+  const body = (coverLetterContent?.textContent || '').trim();
+  if (!body || body.toLowerCase().startsWith('generating cover letter') || body.toLowerCase().startsWith('error:')) {
+    alert('Generate a cover letter first.');
+    return;
+  }
+
+  const fullName = document.getElementById('fullName')?.value?.trim() || 'Candidate';
+  const jobTitle = currentCoverLetterContext?.jobTitle || 'the role';
+  const company = currentCoverLetterContext?.company || 'the company';
+  let recruiterEmail = (currentCoverLetterContext?.recruiterEmail || '').trim();
+  if (!recruiterEmail) {
+    const entered = prompt('Enter recruiter email (optional):', '');
+    recruiterEmail = (entered || '').trim();
+  }
+  if (recruiterEmail && !looksLikeEmail(recruiterEmail)) {
+    alert('That email address looks invalid. Please try again.');
+    return;
+  }
+
+  const subject = `Application for ${jobTitle} - ${fullName}`;
+  const params = new URLSearchParams({ view: 'cm', fs: '1', su: subject, body });
+  if (recruiterEmail) params.set('to', recruiterEmail);
+  const gmailUrl = `https://mail.google.com/mail/?${params.toString()}`;
+  window.open(gmailUrl, '_blank', 'noopener,noreferrer');
 });
 
 const retrievalDebugModal = document.getElementById('retrievalDebugModal');
@@ -737,7 +831,7 @@ debugRetrievalBtn?.addEventListener('click', () => {
   openRetrievalDebug();
 });
 
-async function generateCoverLetter(jobTitle, company, jobDescription) {
+async function generateCoverLetter(jobTitle, company, jobDescription, recruiterEmail = '') {
   const profile = getCurrentProfileFromForm();
 
   if (coverLetterContent) coverLetterContent.textContent = 'Generating cover letter...';
@@ -756,8 +850,16 @@ async function generateCoverLetter(jobTitle, company, jobDescription) {
       throw new Error(d.detail || `Server error ${res.status}`);
     }
     const data = await res.json();
-    openCoverLetterModal(data.cover_letter || 'No cover letter generated.');
+    const coverLetterText = (data.cover_letter || 'No cover letter generated.').trim();
+    currentCoverLetterContext = {
+      jobTitle: jobTitle || '',
+      company: company || '',
+      recruiterEmail: recruiterEmail || '',
+      body: coverLetterText,
+    };
+    openCoverLetterModal(coverLetterText);
   } catch (err) {
+    currentCoverLetterContext = null;
     if (coverLetterContent) coverLetterContent.textContent = 'Error: ' + err.message;
   }
 }
@@ -954,6 +1056,7 @@ function renderJobCard(job, rank) {
   let experience = '';
   let currentList = null;
   let jobDescription = '';
+  let recruiterEmail = '';
 
   for (const line of lines) {
     const raw = line.trim();
@@ -1003,6 +1106,9 @@ function renderJobCard(job, rank) {
     }
   }
 
+  const emailMatch = (job.content || '').match(/\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b/i);
+  if (emailMatch) recruiterEmail = emailMatch[0];
+
   const score = parseInt(matchScore) || 0;
   const scoreClass = score >= 8 ? 'score-high' : score >= 6 ? 'score-mid' : 'score-low';
   const bookmarkKey = jobTitle + '|' + company;
@@ -1044,7 +1150,8 @@ function renderJobCard(job, rank) {
   html += `<button class="card-cover-letter-btn" title="Generate cover letter"
     data-cl-title="${esc(jobTitle)}"
     data-cl-company="${esc(company)}"
-    data-cl-desc="${esc(jobDescription.trim().slice(0, 300))}">
+    data-cl-desc="${esc(jobDescription.trim().slice(0, 300))}"
+    data-cl-email="${esc(recruiterEmail)}">
     Cover Letter
   </button>`;
 
@@ -1237,7 +1344,8 @@ function wireCardInteractions() {
       const title = btn.getAttribute('data-cl-title') || '';
       const company = btn.getAttribute('data-cl-company') || '';
       const desc = btn.getAttribute('data-cl-desc') || '';
-      await generateCoverLetter(title, company, desc);
+      const recruiterEmail = btn.getAttribute('data-cl-email') || '';
+      await generateCoverLetter(title, company, desc, recruiterEmail);
     });
   });
 
