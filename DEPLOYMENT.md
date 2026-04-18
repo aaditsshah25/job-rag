@@ -4,22 +4,17 @@
 
 ```
 GitHub (aaditsshah25/job-rag)
-  ├── Push to main → auto-deploys both Vercel + Railway
-  ├── frontend-react/    → Vercel project "frontend-react" (ONE project, serves everything)
-  │     ├── /            → React landing page (SaaS)
-  │     └── /app         → Main HTML/JS app (copied into dist/app at build time)
-  └── backend.py         → Railway (Python FastAPI)
+  ├── Push to main → auto-deploys Vercel + Railway
+  ├── frontend/      → Vercel (static HTML/JS/CSS, no build step)
+  └── backend.py     → Railway (Python FastAPI, via Docker)
 ```
 
 ## Live URLs
 
 | Service | URL |
 |---|---|
-| Landing page | https://jobmatch-ai-app.vercel.app |
-| Main app | https://jobmatch-ai-app.vercel.app/app |
+| Frontend (dashboard) | https://jobmatch-ai-app.vercel.app |
 | Backend API | https://job-rag-production.up.railway.app |
-| Vercel project | frontend-react (aadits-projects-b151595d) |
-| Latest deployment | frontend-react-3563p2tr7-aadits-projects-b151595d.vercel.app |
 
 ---
 
@@ -34,98 +29,58 @@ GitHub (aaditsshah25/job-rag)
 | `PINECONE_CLOUD` | Pinecone cloud | `aws` |
 | `PINECONE_REGION` | Pinecone region | `us-east-1` |
 | `JOBMATCH_API_KEY` | Shared secret for frontend→backend auth | any random string |
+| `JWT_SECRET` | JWT signing secret | any random string |
 | `ALLOWED_ORIGINS` | CORS allowed origins (comma-separated) | see below |
 | `RESEND_API_KEY` | Resend email API key | `re_...` |
 | `FROM_EMAIL` | Sender email address | `noreply@jobmatchai.dev` |
 | `DB_PATH` | SQLite DB path | `./data/jobmatch.db` |
+| `ADZUNA_APP_ID` | Adzuna API app ID | `763b212a` |
+| `ADZUNA_APP_KEY` | Adzuna API key | `...` |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID | `680440081699-...` |
 
 ```
-ALLOWED_ORIGINS=https://jobmatch-ai-app.vercel.app,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000
+ALLOWED_ORIGINS=https://jobmatch-ai-app.vercel.app,http://localhost:8000,http://127.0.0.1:8000
 ```
 
-### Frontend (Vercel project: "frontend-react")
+### Frontend (Vercel)
 | Variable | Description | Example |
 |---|---|---|
-| `VITE_API_BASE_URL` | Backend public URL (no trailing slash) | `https://job-rag-production.up.railway.app` |
+| `JOBMATCH_API_URL` | Backend public URL (no trailing slash) | `https://job-rag-production.up.railway.app` |
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID | `680440081699-...` |
 
 ---
 
-## Deployment Variables (fill in your values)
+## 1. Vercel Setup (frontend)
 
+The Vercel project is already connected. Key settings:
+- **Root Directory**: *(empty — repo root)*
+- **Output Directory**: `frontend`
+- **Framework**: None (static)
+- **Build Command**: *(none)*
+
+### Required env vars on Vercel
 ```
-FRONTEND_PUBLIC_URL  = https://jobmatch-ai-app.vercel.app
-BACKEND_PUBLIC_URL   = https://job-rag-production.up.railway.app
-VITE_API_BASE_URL    = https://job-rag-production.up.railway.app
-ALLOWED_ORIGINS      = https://jobmatch-ai-app.vercel.app,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000
+JOBMATCH_API_URL=https://job-rag-production.up.railway.app
+GOOGLE_CLIENT_ID=680440081699-mhuuujlrno9k45p34uec2o4lo5ibt30e.apps.googleusercontent.com
 ```
 
----
-
-## 1. GitHub Setup
-
-The repo is already connected at: https://github.com/aaditsshah25/job-rag
-
-### Add GitHub Actions Secrets (for CI)
-Go to: **GitHub → Settings → Secrets and variables → Actions → New repository secret**
-
-No secrets are required for CI to run — it uses stub values for the import check.
-
----
-
-## 2. Vercel Setup — frontend-react (React Landing Page)
-
-### Option A: Via Vercel Dashboard (recommended)
-1. Go to https://vercel.com/new
-2. Import GitHub repo `aaditsshah25/job-rag`
-3. Set **Root Directory** → `frontend-react`
-4. Framework: **Vite** (auto-detected)
-5. Build command: `npm run build`
-6. Output directory: `dist`
-7. Add environment variable:
-   - `VITE_API_BASE_URL` = `https://job-rag-production.up.railway.app`
-8. Deploy
-
-### Option B: Via CLI (PowerShell)
-```powershell
-cd "frontend-react"
+### Re-deploy via CLI
+```bash
 npx vercel --prod
-# Follow prompts, select existing team, create new project "frontend-react"
 ```
 
-### Connect GitHub for auto-deploy
-In Vercel project settings → Git → Connect to `aaditsshah25/job-rag`, root dir `frontend-react`
-
 ---
 
-## 3. Vercel Setup — frontend (Legacy HTML/JS App)
-
-Already deployed at https://jobmatch-ai-app.vercel.app
-
-To connect GitHub auto-deploy:
-1. Go to https://vercel.com/aadits-projects-b151595d/frontend/settings/git
-2. Connect Git Repository → GitHub → `aaditsshah25/job-rag`
-3. Set Root Directory → `frontend`
-4. Ensure these env vars are set:
-   - `JOBMATCH_API_URL` = `https://job-rag-production.up.railway.app`
-   - `JOBMATCH_API_KEY` = (your shared secret)
-   - `GOOGLE_CLIENT_ID` = `680440081699-mhuuujlrno9k45p34uec2o4lo5ibt30e.apps.googleusercontent.com`
-
----
-
-## 4. Backend Hosting — Railway
+## 2. Backend Hosting — Railway
 
 Backend is live at: https://job-rag-production.up.railway.app
 
-### Update ALLOWED_ORIGINS on Railway
-1. Go to https://railway.app → your project → Variables
-2. Set or update:
-```
-ALLOWED_ORIGINS=https://jobmatch-ai-app.vercel.app,http://localhost:5173,http://127.0.0.1:5173,http://localhost:8000
-```
-3. Railway redeploys automatically.
+Deployed via **Dockerfile** at repo root. Railway builds and runs the container automatically on push to `main`.
+
+### Manual redeploy (Railway dashboard)
+Railway → your project → Deployments → Redeploy
 
 ### Railway alternative: Render
-If migrating to Render:
 1. New Web Service → connect GitHub repo
 2. Build command: `pip install -r requirements.txt`
 3. Start command: `uvicorn backend:app --host 0.0.0.0 --port $PORT`
@@ -133,61 +88,40 @@ If migrating to Render:
 
 ---
 
-## 5. Exact Order of Operations (first-time setup)
+## 3. Local Development
 
-1. Push code to GitHub main (already done)
-2. Set Railway `ALLOWED_ORIGINS` env var (manual, Railway dashboard)
-3. Deploy `frontend-react` to Vercel as new project with root dir `frontend-react`
-4. Connect `frontend` Vercel project to GitHub for auto-deploy
-5. Verify CI passes on GitHub Actions
+```bash
+# Backend
+cd "C:\Users\aadit\Documents\FLAME\YEAR 4\SEM 8\Gen AI\Aadit_Ananya_RAG"
+cp .env.example .env   # fill in real keys
+.venv/Scripts/activate
+uvicorn backend:app --reload --port 8000
+# Open http://localhost:8000
+```
+
+The dashboard is served by FastAPI at `http://localhost:8000` via the `frontend/` static mount.
 
 ---
 
-## 6. Rollback Steps
+## 4. Rollback
 
-### Frontend rollback (Vercel)
-```powershell
-# List recent deployments
+### Frontend (Vercel)
+```bash
 npx vercel ls
-
-# Promote a previous deployment to production
 npx vercel promote <deployment-url>
 ```
+Or: Vercel dashboard → Deployments → click any previous deploy → "Promote to Production"
 
-Or via Vercel dashboard: Deployments → click any previous deploy → "Promote to Production"
-
-### Backend rollback (Railway)
+### Backend (Railway)
 Railway dashboard → Deployments → click previous deploy → "Rollback"
 
 ---
 
-## 7. Local Development (PowerShell)
-
-```powershell
-# Backend
-cd "C:\Users\aadit\Documents\FLAME\YEAR 4\SEM 8\Gen AI\Aadit_Ananya_RAG"
-copy .env.example .env   # then fill in real keys
-.venv\Scripts\Activate.ps1
-uvicorn backend:app --reload --port 8000
-
-# Frontend React (separate terminal)
-cd frontend-react
-npm install
-# Create .env.local with:  VITE_API_BASE_URL=http://localhost:8000
-npm run dev
-# Open http://localhost:5173
-
-# Legacy frontend
-# Just open http://localhost:8000 (served by FastAPI)
-```
-
----
-
-## 8. CI/CD Summary
+## 5. CI/CD
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push and PR to `main`:
 - **backend job**: installs Python deps, compiles `backend.py`, checks imports
-- **frontend-react job**: `npm ci` + `npm run build` with production env var
+- **frontend job**: verifies required static files exist (`index.html`, `app.js`, `config.js`)
 
-Vercel auto-deploys frontend on push to `main` (after GitHub integration is connected).
-Railway auto-deploys backend on push to `main` (if Railway GitHub integration is enabled).
+Vercel auto-deploys frontend on push to `main`.
+Railway auto-deploys backend on push to `main` (requires Railway GitHub integration enabled).
