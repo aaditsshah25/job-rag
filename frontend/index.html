@@ -144,6 +144,10 @@
       </div>
       <div class="header-actions">
         <p class="tagline">RAG-Powered Job Recommendations</p>
+        <button id="myApplicationsBtn" class="btn-secondary myapps-nav-btn" type="button">
+          My Applications
+          <span id="applicationsBadge" class="myapps-nav-badge hidden">0</span>
+        </button>
         <div class="account-chip hidden" id="accountChip">
           <div class="account-avatar" id="accountAvatar">A</div>
           <div class="account-meta">
@@ -322,6 +326,23 @@
 
     </section>
 
+    <section id="myApplicationsPanel" class="hidden">
+      <div class="myapps-shell">
+        <div class="myapps-header">
+          <div>
+            <h2>My Applications</h2>
+            <p>Track and manage your saved jobs</p>
+          </div>
+          <button id="backToSearchBtn" class="btn-secondary" type="button">Back</button>
+        </div>
+
+        <div id="myAppsStats" class="myapps-stats"></div>
+        <div id="myAppsTabs" class="myapps-tabs" role="tablist" aria-label="Application filters"></div>
+        <div id="myApplicationsList" class="myapps-list"></div>
+        <button id="findJobsBtn" class="hidden" type="button">Find Jobs</button>
+      </div>
+    </section>
+
   </main>
 
   <!-- ─── FOOTER ─── -->
@@ -377,9 +398,8 @@
           <select id="applicationStatusSelect">
             <option value="saved">saved</option>
             <option value="applied">applied</option>
-            <option value="oa">online assessment</option>
-            <option value="interview">interview</option>
-            <option value="offer">offer</option>
+            <option value="interviewing">interviewing</option>
+            <option value="offered">offered</option>
             <option value="rejected">rejected</option>
           </select>
         </div>
@@ -431,6 +451,8 @@
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="data.js?v=3"></script>
   <script src="app.js?v=4"></script>
+
+  <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 </body>
 
 </html>

@@ -3643,3 +3643,316 @@ body::after {
   border-color: var(--border-light);
   color: var(--text-secondary);
 }
+
+
+/* My Applications */
+.myapps-nav-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.myapps-nav-badge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.7rem;
+  line-height: 20px;
+  font-weight: 700;
+  text-align: center;
+}
+
+#app-main.myapps-open {
+  grid-template-columns: 1fr;
+}
+
+#myApplicationsPanel {
+  width: 100%;
+}
+
+.myapps-shell {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-sm);
+  padding: 22px;
+}
+
+.myapps-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.myapps-header h2 {
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-size: 1.3rem;
+  line-height: 1.2;
+  margin-bottom: 4px;
+}
+
+.myapps-header p {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.myapps-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.myapps-stat {
+  border: 1px solid var(--border-light);
+  background: var(--bg-section);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.myapps-stat span {
+  display: block;
+  font-family: 'Manrope', 'Segoe UI', sans-serif;
+  font-size: 1.2rem;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.myapps-stat label {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.myapps-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.myapps-tab {
+  border: 1px solid var(--border-light);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.myapps-tab.active {
+  border-color: var(--accent);
+  background: var(--accent-light);
+  color: var(--accent-text);
+}
+
+.myapps-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+.myapps-card {
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  background: var(--bg-card);
+  padding: 14px;
+  box-shadow: var(--shadow-xs);
+  animation: cardIn 0.3s ease both;
+  transition: opacity 0.22s ease, height 0.22s ease, margin 0.22s ease, padding 0.22s ease;
+}
+
+.myapps-card.is-removing {
+  opacity: 0;
+  height: 0;
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  overflow: hidden;
+}
+
+.myapps-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.myapps-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  font-size: 0.85rem;
+  flex: 0 0 auto;
+}
+
+.myapps-title-wrap h3 {
+  font-size: 0.95rem;
+  line-height: 1.2;
+}
+
+.myapps-title-wrap p {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.myapps-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.myapps-status-row {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  border-radius: 999px;
+  padding: 4px 10px;
+  text-transform: capitalize;
+}
+
+.status-saved {
+  background: #eceff4;
+  color: #4b5563;
+}
+
+.status-applied {
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.status-interviewing {
+  background: #efe7ff;
+  color: #7c3aed;
+}
+
+.status-offered {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.status-rejected {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.myapps-status-select {
+  max-width: 180px;
+}
+
+.myapps-notes-wrap {
+  margin-top: 10px;
+}
+
+.myapps-notes-wrap summary {
+  cursor: pointer;
+  color: var(--accent-text);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.myapps-notes {
+  margin-top: 8px;
+  min-height: 88px;
+}
+
+.myapps-footer {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.myapps-date {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.myapps-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.myapps-empty {
+  min-height: 300px;
+  border: 1.5px dashed var(--border-medium);
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.myapps-empty-icon {
+  font-size: 2rem;
+  margin-bottom: 8px;
+}
+
+.toast-host {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.app-toast {
+  background: #111827;
+  color: #fff;
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 180px;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.8rem;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+
+.app-toast.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (min-width: 768px) {
+  .myapps-list {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 767px) {
+  .myapps-stats {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .myapps-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
