@@ -394,6 +394,7 @@ async function handleResumeUpload(file) {
 
     // Auto-populate hidden fields from parsed resume
     if (data.name) document.getElementById('fullName').value = data.name;
+    if (data.email) document.getElementById('email').value = data.email;
     if (data.experience_years) {
       const expVal = Math.min(Math.max(parseInt(data.experience_years, 10) || 0, 0), 30);
       document.getElementById('experience').value = expVal;

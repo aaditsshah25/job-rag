@@ -2939,3 +2939,155 @@ input[type="range"]::-moz-range-thumb {
 .impact-high { background: rgba(220,38,38,0.1);  color: var(--danger); }
 .impact-med  { background: rgba(245,158,11,0.1); color: #d97706; }
 .impact-low  { background: rgba(22,163,74,0.1);  color: #16a34a; }
+
+/* -------------------------------------------------------
+   Minimal UI Refresh Overrides
+------------------------------------------------------- */
+:root {
+  --bg-body: #f6f7f9;
+  --bg-card: #ffffff;
+  --bg-card-hover: #f8fafc;
+  --bg-input: #ffffff;
+  --bg-section: #f8fafc;
+  --bg-secondary: #f8fafc;
+  --border-light: #e5e7eb;
+  --border-medium: #d1d5db;
+
+  --accent: #2563eb;
+  --accent-hover: #1d4ed8;
+  --accent-light: #dbeafe;
+  --accent-muted: rgba(37, 99, 235, 0.08);
+  --accent-text: #1e3a8a;
+
+  --text-primary: #111827;
+  --text-secondary: #374151;
+  --text-muted: #6b7280;
+
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 4px 10px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 8px 22px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.1);
+}
+
+body::before,
+body::after {
+  display: none;
+}
+
+#app-header {
+  background: #ffffff;
+  border-bottom: 1px solid var(--border-light);
+  backdrop-filter: none;
+}
+
+#app-main {
+  gap: 16px;
+}
+
+.glass-panel {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
+}
+
+.constraints-section,
+.resume-dropzone,
+.tag-input-container {
+  background: var(--bg-section);
+  border: 1px solid var(--border-light);
+}
+
+.resume-dropzone {
+  border-style: solid;
+}
+
+.resume-dropzone:hover,
+.resume-dropzone.drag-over {
+  border-color: var(--accent);
+  background: var(--accent-muted);
+}
+
+.btn-primary {
+  background: var(--accent);
+  border: 0;
+  box-shadow: none;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+  transform: none;
+  box-shadow: none;
+}
+
+.btn-secondary {
+  background: #fff;
+  border: 1px solid var(--border-light);
+  box-shadow: none;
+}
+
+.state-card,
+.summary-card,
+.job-card,
+.global-actions-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
+}
+
+.job-card:hover {
+  transform: none;
+  box-shadow: var(--shadow-md);
+}
+
+.job-card-header:hover {
+  background: var(--bg-card-hover);
+}
+
+.job-section,
+.stat-item,
+.meta-chip,
+.job-experience,
+.matches-count {
+  background: var(--bg-section);
+  border: 1px solid var(--border-light);
+}
+
+.section-dot,
+.reasons-section .job-list li::before,
+.gaps-section .job-list li::before,
+.actions-section .job-list li::before,
+.action-list li::before {
+  background: var(--accent);
+}
+
+[data-theme="dark"] {
+  --bg-body: #0f172a;
+  --bg-card: #111827;
+  --bg-card-hover: #1f2937;
+  --bg-input: #111827;
+  --bg-section: #1f2937;
+  --bg-secondary: #1f2937;
+  --border-light: #374151;
+  --border-medium: #4b5563;
+
+  --accent: #60a5fa;
+  --accent-hover: #3b82f6;
+  --accent-light: rgba(96, 165, 250, 0.14);
+  --accent-muted: rgba(96, 165, 250, 0.12);
+  --accent-text: #bfdbfe;
+
+  --text-primary: #f9fafb;
+  --text-secondary: #d1d5db;
+  --text-muted: #9ca3af;
+}
+
+[data-theme="dark"] #app-header {
+  background: #111827;
+}
+
+[data-theme="dark"] .btn-secondary,
+[data-theme="dark"] .card-copy-btn {
+  background: var(--bg-section);
+  border-color: var(--border-light);
+  color: var(--text-secondary);
+}

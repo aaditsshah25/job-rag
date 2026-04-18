@@ -954,6 +954,7 @@ async def parse_resume(file: UploadFile = File(...)):
     prompt = f"""Extract structured profile information from this resume text. Return ONLY valid JSON with these exact fields:
 {{
   "name": "full name or empty string",
+  "email": "email address or empty string",
   "skills": ["skill1", "skill2"],
   "experience_years": 0,
   "education": "highest degree or empty string",
@@ -976,6 +977,12 @@ Resume text:
         parsed = json.loads(response.choices[0].message.content)
     except Exception:
         parsed = {}
+
+    # Fallback email extraction from raw text if model misses it.
+    if not _safe_str(parsed.get("email")):
+        email_match = re.search(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b", text)
+        if email_match:
+            parsed["email"] = email_match.group(0)
 
     parsed["raw_text"] = text[:4000]
     parsed["resume_text"] = parsed["raw_text"]  # alias for compatibility
