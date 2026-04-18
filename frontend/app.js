@@ -67,11 +67,44 @@ function setAuthStatus(msg) {
 function showAppAfterAuth(user) {
   document.getElementById('auth-gate')?.classList.add('hidden');
   document.getElementById('app-shell')?.classList.remove('hidden');
+  updateHeaderAccount(user);
 
   const emailField = document.getElementById('email');
   const nameField = document.getElementById('fullName');
   if (emailField && !emailField.value && user?.email) emailField.value = user.email;
   if (nameField && !nameField.value && user?.name) nameField.value = user.name;
+}
+
+function updateHeaderAccount(user) {
+  const chip = document.getElementById('accountChip');
+  const avatar = document.getElementById('accountAvatar');
+  const nameEl = document.getElementById('accountName');
+  const emailEl = document.getElementById('accountEmail');
+
+  if (!chip || !avatar || !nameEl || !emailEl) return;
+
+  const name = (user?.name || user?.email || 'Signed in').trim();
+  const email = (user?.email || '').trim();
+  const initials = (name || 'U')
+    .split(/\s+|@/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase() || 'U';
+
+  avatar.textContent = initials;
+  nameEl.textContent = name;
+  emailEl.textContent = email;
+  chip.classList.remove('hidden');
+}
+
+function signOut() {
+  AUTH.clearSession();
+  document.getElementById('app-shell')?.classList.add('hidden');
+  document.getElementById('auth-gate')?.classList.remove('hidden');
+  document.getElementById('accountChip')?.classList.add('hidden');
+  setAuthStatus('Signed out. Please sign in with Google to continue.');
 }
 
 async function resolveGoogleClientId() {
@@ -158,6 +191,8 @@ async function initGoogleGate() {
 }
 
 initGoogleGate();
+
+document.getElementById('signOutBtn')?.addEventListener('click', signOut);
 
 // ─── SESSION ID ───────────────────────────────────────
 const SESSION_ID_KEY = 'jobmatch_session_id';

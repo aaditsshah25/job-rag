@@ -1,10 +1,6 @@
 // JobMatch AI - Runtime Configuration
-// Vercel injects NEXT_PUBLIC_* vars at build time via vercel.json env.
-// For local dev, default to local backend.
-const IS_LOCAL_HOST = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-const DEFAULT_API_BASE_URL = IS_LOCAL_HOST
-  ? 'http://127.0.0.1:8000'
-  : 'https://job-rag-production.up.railway.app';
+// The frontend is deployed on Vercel and points to the hosted backend by default.
+const DEFAULT_API_BASE_URL = 'https://job-rag-production.up.railway.app';
 
 const CONFIG = {
   API_BASE_URL: window.JOBMATCH_API_URL || DEFAULT_API_BASE_URL,

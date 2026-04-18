@@ -47,10 +47,20 @@
           </svg></span>
         <span class="logo-text">JobMatch<span class="logo-accent">AI</span></span>
       </div>
-      <p class="tagline">RAG-Powered Job Recommendations</p>
-      <button id="darkModeToggle" class="btn-secondary dark-mode-btn" title="Toggle dark mode">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
-      </button>
+      <div class="header-actions">
+        <p class="tagline">RAG-Powered Job Recommendations</p>
+        <div class="account-chip hidden" id="accountChip">
+          <div class="account-avatar" id="accountAvatar">A</div>
+          <div class="account-meta">
+            <span class="account-name" id="accountName">Signed in</span>
+            <span class="account-email" id="accountEmail"></span>
+          </div>
+          <button type="button" class="account-signout" id="signOutBtn">Sign out</button>
+        </div>
+        <button id="darkModeToggle" class="btn-secondary dark-mode-btn" title="Toggle dark mode">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>
+        </button>
+      </div>
     </div>
   </header>
 
