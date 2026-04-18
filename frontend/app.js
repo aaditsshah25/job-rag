@@ -6,12 +6,142 @@
 
 // No auth required for localhost
 const AUTH = {
+  TOKEN_KEY: 'jobmatch_jwt',
+  USER_KEY: 'jobmatch_user',
+
+  getToken() {
+    return localStorage.getItem(this.TOKEN_KEY);
+  },
+
+  getUser() {
+    try {
+      return JSON.parse(localStorage.getItem(this.USER_KEY) || 'null');
+    } catch {
+      return null;
+    }
+  },
+
+  saveSession(token, user) {
+    localStorage.setItem(this.TOKEN_KEY, token);
+    localStorage.setItem(this.USER_KEY, JSON.stringify(user || {}));
+  },
+
+  clearSession() {
+    localStorage.removeItem(this.TOKEN_KEY);
+    localStorage.removeItem(this.USER_KEY);
+  },
+
+  decodeJwtPayload(token) {
+    const payloadSegment = (token || '').split('.')[1] || '';
+    const normalized = payloadSegment.replace(/-/g, '+').replace(/_/g, '/');
+    const padding = normalized.length % 4;
+    const base64 = normalized + (padding ? '='.repeat(4 - padding) : '');
+    return JSON.parse(atob(base64));
+  },
+
+  isAuthenticated() {
+    const token = this.getToken();
+    if (!token) return false;
+    try {
+      const payload = this.decodeJwtPayload(token);
+      return !!payload.exp && payload.exp * 1000 > Date.now();
+    } catch {
+      return false;
+    }
+  },
+
   headers(extra = {}) {
     const h = { 'Content-Type': 'application/json', ...extra };
+    const token = this.getToken();
+    if (token) h.Authorization = `Bearer ${token}`;
     if (CONFIG.API_KEY) h['X-Api-Key'] = CONFIG.API_KEY;
     return h;
   },
 };
+
+function setAuthStatus(msg) {
+  const el = document.getElementById('auth-status');
+  if (el) el.textContent = msg || '';
+}
+
+function showAppAfterAuth(user) {
+  document.getElementById('auth-gate')?.classList.add('hidden');
+  document.getElementById('app-shell')?.classList.remove('hidden');
+
+  const emailField = document.getElementById('email');
+  const nameField = document.getElementById('fullName');
+  if (emailField && !emailField.value && user?.email) emailField.value = user.email;
+  if (nameField && !nameField.value && user?.name) nameField.value = user.name;
+}
+
+async function handleGoogleCredential(credentialResponse) {
+  setAuthStatus('Signing you in...');
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/auth/google', {
+      method: 'POST',
+      headers: AUTH.headers(),
+      body: JSON.stringify({ credential: credentialResponse.credential }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Sign-in failed (${res.status})`);
+    }
+
+    const data = await res.json();
+    AUTH.saveSession(data.access_token, data.user || {});
+    showAppAfterAuth(data.user || {});
+    setAuthStatus('');
+  } catch (err) {
+    setAuthStatus(err.message || 'Google sign-in failed');
+  }
+}
+
+function initGoogleGate() {
+  if (AUTH.isAuthenticated()) {
+    showAppAfterAuth(AUTH.getUser());
+    return;
+  }
+
+  document.getElementById('auth-gate')?.classList.remove('hidden');
+  document.getElementById('app-shell')?.classList.add('hidden');
+
+  if (!CONFIG.GOOGLE_CLIENT_ID) {
+    setAuthStatus('Google SSO is not configured. Please set GOOGLE_CLIENT_ID.');
+    return;
+  }
+
+  const renderButton = () => {
+    if (!window.google || !window.google.accounts || !window.google.accounts.id) {
+      setAuthStatus('Loading Google Sign-In...');
+      return;
+    }
+    window.google.accounts.id.initialize({
+      client_id: CONFIG.GOOGLE_CLIENT_ID,
+      callback: handleGoogleCredential,
+      auto_select: false,
+      cancel_on_tap_outside: false,
+    });
+    const host = document.getElementById('google-signin-btn');
+    if (host) {
+      host.innerHTML = '';
+      window.google.accounts.id.renderButton(host, {
+        theme: 'outline',
+        size: 'large',
+        width: 320,
+        text: 'signin_with',
+        shape: 'rectangular',
+      });
+      setAuthStatus('');
+    }
+  };
+
+  renderButton();
+  const gsiScript = document.querySelector('script[src*="accounts.google.com/gsi/client"]');
+  gsiScript?.addEventListener('load', renderButton, { once: true });
+}
+
+initGoogleGate();
 
 // ─── SESSION ID ───────────────────────────────────────
 const SESSION_ID_KEY = 'jobmatch_session_id';

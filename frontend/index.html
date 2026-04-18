@@ -23,8 +23,21 @@
 
 <body>
 
+  <section id="auth-gate">
+    <div class="auth-card">
+      <div class="auth-logo">
+        <span class="logo-icon"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon></svg></span>
+        <span>JobMatchAI</span>
+      </div>
+      <h1 class="auth-heading">Sign in to continue</h1>
+      <p class="auth-subtext">Only Google SSO users can access the app.</p>
+      <div id="google-signin-btn" class="google-signin-slot"></div>
+      <p id="auth-status" class="auth-subtext"></p>
+    </div>
+  </section>
+
   <!-- ─── HEADER ─── -->
-  <div id="app-shell">
+  <div id="app-shell" class="hidden">
   <header id="app-header">
     <div class="header-inner">
       <div class="logo">
@@ -310,6 +323,7 @@
   </div>
 
   <script src="config.js?v=3"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="data.js?v=3"></script>
   <script src="app.js?v=3"></script>
 </body>
