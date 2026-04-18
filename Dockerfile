@@ -9,11 +9,12 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY Aadit_Ananya_RAG/rag/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the correct backend
-COPY Aadit_Ananya_RAG/rag/ .
+# Copy backend and frontend
+COPY backend.py source_ingestion.py ./
+COPY frontend/ ./frontend/
 
 # Create data directory
 RUN mkdir -p /app/data
