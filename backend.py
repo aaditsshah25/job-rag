@@ -41,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
+from openai import OpenAI
 import google.generativeai as genai
 from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
@@ -86,13 +87,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY    = os.getenv("GOOGLE_API_KEY", "")
 PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY", "")
 PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
-EMBED_MODEL       = "models/gemini-embedding-001"
-CHAT_MODEL        = os.getenv("GEMINI_CHAT_MODEL", os.getenv("GEMMA_CHAT_MODEL", "gemini-2.0-flash"))
+EMBED_MODEL       = "text-embedding-3-small"
+CHAT_MODEL        = os.getenv("GEMMA_CHAT_MODEL", "gemma-3-27b-it")
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
@@ -121,6 +123,7 @@ JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
 # ─── Lazy singletons ──────────────────────────────────
+_openai_client = None
 _gemini_model = None
 _pc = None
 _last_source_stats: dict[str, object] = {
@@ -131,6 +134,14 @@ _last_source_stats: dict[str, object] = {
     "source_counts": {},
     "external_total": 0,
 }
+
+def get_openai() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY is not set.")
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
 def get_gemini():
     global _gemini_model
@@ -305,7 +316,7 @@ async def init_db():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
-    if GOOGLE_API_KEY and PINECONE_API_KEY:
+    if OPENAI_API_KEY and PINECONE_API_KEY:
         try:
             index_dataset(force=False)
         except Exception as e:
@@ -736,7 +747,7 @@ def get_or_create_index():
     if PINECONE_INDEX not in existing:
         client.create_index(
             name=PINECONE_INDEX,
-            dimension=768,
+            dimension=1536,
             metric="cosine",
             spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
         )
@@ -744,32 +755,17 @@ def get_or_create_index():
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
     # Retry transient provider errors (timeouts/rate limits) to keep indexing resilient.
-    if not GOOGLE_API_KEY:
-        raise RuntimeError("GOOGLE_API_KEY is not set.")
-    genai.configure(api_key=GOOGLE_API_KEY)
-    max_attempts = 5
+    max_attempts = 3
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
-            result = genai.embed_content(model=EMBED_MODEL, content=texts, task_type="retrieval_document")
-            # embed_content returns {"embedding": [float,...]} for single or list of floats per item
-            emb = result["embedding"]
-            # If texts is a list, the API returns a list of embedding vectors
-            if texts and isinstance(emb[0], list):
-                return emb
-            # Single string passed as list of 1 — wrap it
-            return [emb]
+            resp = get_openai().embeddings.create(model=EMBED_MODEL, input=texts)
+            return [r.embedding for r in resp.data]
         except Exception as exc:
             last_error = exc
             if attempt >= max_attempts:
                 break
-            # Honour retry_delay from 429 responses if present, else exponential backoff
-            exc_str = str(exc)
-            retry_match = re.search(r"retry_delay\s*\{\s*seconds:\s*(\d+)", exc_str)
-            if retry_match:
-                backoff_seconds = int(retry_match.group(1)) + 2
-            else:
-                backoff_seconds = 1.5 ** attempt
+            backoff_seconds = 1.5 ** attempt
             log.warning(
                 "Embedding request failed (attempt %d/%d): %s; retrying in %.1fs",
                 attempt,
@@ -856,11 +852,13 @@ def index_dataset(force: bool = False) -> int:
             vectors.append({"id": vid, "values": emb, "metadata": meta})
         return vectors
 
-    for i, batch in enumerate(batches):
-        all_vectors.extend(embed_batch((batch, i * EMBED_BATCH)))
-        log.info("Embedded %d / %d batches...", i + 1, len(batches))
-        if i < len(batches) - 1:
-            time.sleep(1.0)  # avoid rate-limit bursts
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(embed_batch, (batch, i * EMBED_BATCH)): i for i, batch in enumerate(batches)}
+        completed = 0
+        for future in as_completed(futures):
+            all_vectors.extend(future.result())
+            completed += 1
+            log.info("Embedded %d / %d batches...", completed, len(batches))
 
     total = 0
     for i in range(0, len(all_vectors), UPSERT_BATCH):
@@ -1015,7 +1013,7 @@ def _normalize_pinecone_match(match) -> dict:
     return normalized
 
 def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
-    if not GOOGLE_API_KEY or not PINECONE_API_KEY:
+    if not OPENAI_API_KEY or not PINECONE_API_KEY:
         return _search_jobs_local_csv(query, top_k)
 
     try:
