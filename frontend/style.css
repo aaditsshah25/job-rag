@@ -4164,7 +4164,6 @@ body::after {
   padding: 9px 14px;
   font-size: 0.875rem;
   color: var(--text-muted);
-  margin-left: auto;
 }
 
 .browse-go-btn {
@@ -4402,17 +4401,21 @@ body::after {
 
   .browse-filters-bar {
     padding: 12px;
+  }
+
+  .browse-filter-row {
     flex-direction: column;
   }
 
   .browse-filter-input,
-  .browse-filter-salary,
   .browse-filter-select {
     width: 100%;
   }
 
-  .browse-search-wrap {
+  .browse-filter-actions {
+    margin-left: 0;
     width: 100%;
+    justify-content: flex-end;
   }
 
   .browse-grid {
