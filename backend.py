@@ -1214,9 +1214,10 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
         generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=4096),
     )
     text = response.text.strip()
-    # Strip any preamble before the expected heading (Gemma sometimes adds intro text)
+    # Gemma 4 outputs chain-of-thought then the final answer.
+    # The real formatted section is the LAST occurrence of the heading.
     marker = "# Your Job Match Results"
-    idx = text.find(marker)
+    idx = text.rfind(marker)
     if idx > 0:
         text = text[idx:]
     return text
@@ -2188,11 +2189,18 @@ async def browse_jobs(
 
     # ── Filters ──────────────────────────────────────────
     if work_type:
+        # work_type in CSV = employment type: "Full-Time", "Part-Time", "Intern", "Temporary", "Contract"
+        # Also handle remote/hybrid/on-site if stored in metadata from live sources
         wt_lower = work_type.lower()
-        candidates = [c for c in candidates if wt_lower in (c.get("work_type") or "").lower()]
+        candidates = [
+            c for c in candidates
+            if wt_lower in (c.get("work_type") or "").lower()
+            or (wt_lower == "full-time" and "full time" in (c.get("work_type") or "").lower())
+            or (wt_lower == "part-time" and "part time" in (c.get("work_type") or "").lower())
+        ]
 
     if location:
-        loc_lower = location.lower()
+        loc_lower = location.strip().lower()
         candidates = [
             c for c in candidates
             if loc_lower in (c.get("location") or "").lower()
@@ -2203,6 +2211,7 @@ async def browse_jobs(
         filtered = []
         for c in candidates:
             extracted = _extract_salary_min(_safe_str(c.get("salary", "")))
+            # Keep jobs with no salary info (can't verify) or salary above threshold
             if extracted == 0 or extracted >= salary_min:
                 filtered.append(c)
         candidates = filtered
@@ -2211,8 +2220,17 @@ async def browse_jobs(
         filtered = []
         for c in candidates:
             raw_exp = _safe_str(c.get("experience", ""))
-            m = re.search(r"(\d+)", raw_exp)
-            if not m or int(m.group(1)) <= experience_years + 2:
+            if not raw_exp:
+                # No experience info — include it (can't filter what we don't know)
+                filtered.append(c)
+                continue
+            # Extract the minimum required experience (first number in range like "5–15 yrs" → 5)
+            nums = re.findall(r"(\d+)", raw_exp)
+            if not nums:
+                filtered.append(c)
+                continue
+            min_required = int(nums[0])
+            if min_required <= experience_years:
                 filtered.append(c)
         candidates = filtered
 
