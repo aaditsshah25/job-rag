@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=7" />
+  <link rel="stylesheet" href="style.css?v=8" />
   <style>
     .required-star {
       color: #ef4444;
@@ -348,12 +348,22 @@
             <input id="browseSearchInput" class="browse-search-input" type="text" placeholder="Search by role, skill, or keyword…" autocomplete="off" />
           </div>
           <select id="browseWorkTypeFilter" class="browse-filter-select">
-            <option value="">All Types</option>
+            <option value="">All Work Types</option>
             <option value="Remote">Remote</option>
             <option value="Hybrid">Hybrid</option>
             <option value="On-site">On-site</option>
           </select>
           <input id="browseLocationFilter" class="browse-filter-input" type="text" placeholder="Location…" autocomplete="off" />
+          <input id="browseSalaryFilter" class="browse-filter-input browse-filter-salary" type="number" placeholder="Min salary (₹/yr)" min="0" step="50000" autocomplete="off" />
+          <select id="browseExperienceFilter" class="browse-filter-select">
+            <option value="-1">Any Experience</option>
+            <option value="0">Fresher (0 yrs)</option>
+            <option value="2">Up to 2 yrs</option>
+            <option value="5">Up to 5 yrs</option>
+            <option value="8">Up to 8 yrs</option>
+            <option value="10">Up to 10 yrs</option>
+          </select>
+          <button id="browseClearBtn" class="btn-secondary browse-clear-btn" type="button">Clear</button>
           <button id="browseSearchBtn" class="btn-primary browse-go-btn" type="button">Search</button>
         </div>
 
@@ -369,6 +379,7 @@
           <div class="loader"><div class="loader-ring"></div></div>
           <h3>Loading jobs…</h3>
         </div>
+        <div id="browseResultsCount" class="browse-results-count hidden"></div>
         <div id="browseJobsGrid" class="browse-grid hidden"></div>
         <div id="browsePagination" class="browse-pagination hidden">
           <button id="browsePrevBtn" class="btn-secondary" type="button" disabled>← Prev</button>
@@ -502,7 +513,7 @@
   <script src="config.js?v=3"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="data.js?v=3"></script>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 
   <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 </body>

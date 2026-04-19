@@ -2038,6 +2038,102 @@ async def get_resume_tailoring(session_id: str, page: int = 0):
     return {"tailoring": result, "page": page}
 
 
+# Cache for the full browse job list (refreshed every 10 minutes)
+_browse_cache: dict = {"jobs": [], "fetched_at": 0.0}
+_BROWSE_CACHE_TTL = 600  # seconds
+
+def _fetch_all_jobs_from_pinecone() -> list[dict]:
+    """Fetch every job from Pinecone by iterating list() + batched fetch()."""
+    index = get_or_create_index()
+    all_ids: list[str] = []
+    try:
+        for id_page in index.list(limit=100):
+            if isinstance(id_page, list):
+                all_ids.extend(id_page)
+            else:
+                break
+    except Exception as exc:
+        log.warning("Pinecone list() failed during browse fetch: %s", exc)
+
+    if not all_ids:
+        log.info("browse: Pinecone list() returned 0 ids; falling back to broad semantic search")
+        return []
+
+    log.info("browse: fetching %d job vectors from Pinecone", len(all_ids))
+    jobs: list[dict] = []
+    FETCH_BATCH = 200
+    for i in range(0, len(all_ids), FETCH_BATCH):
+        batch_ids = all_ids[i: i + FETCH_BATCH]
+        try:
+            fetch_resp = index.fetch(ids=batch_ids)
+            vectors = fetch_resp.vectors if hasattr(fetch_resp, "vectors") else {}
+            for vid, vec in vectors.items():
+                metadata = getattr(vec, "metadata", {}) or {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                job: dict[str, object] = {}
+                if metadata.get("source") == "blob" and metadata.get("text"):
+                    job = _parse_pinecone_blob_text(metadata["text"])
+                else:
+                    job = dict(metadata)
+                job.setdefault("title", job.get("role", ""))
+                job.setdefault("company", "")
+                job.setdefault("location", "")
+                job.setdefault("country", "")
+                job.setdefault("work_type", "")
+                job.setdefault("salary", "")
+                job.setdefault("experience", "")
+                job.setdefault("description", "")
+                job.setdefault("industry", "")
+                job.setdefault("source", "pinecone")
+                job.setdefault("external_url", "")
+                job.setdefault("skills", [])
+                if not isinstance(job.get("skills"), list):
+                    job["skills"] = _parse_skills(_safe_str(job.get("skills", "")))
+                if not isinstance(job.get("benefits"), list):
+                    job["benefits"] = _parse_benefits(_safe_str(job.get("benefits", "")))
+                if job.get("title"):
+                    jobs.append(job)
+        except Exception as exc:
+            log.warning("browse: fetch batch %d failed: %s", i, exc)
+
+    return jobs
+
+
+def _get_browse_jobs() -> list[dict]:
+    """Return cached full job list, refreshing if stale."""
+    now = time.time()
+    if _browse_cache["jobs"] and (now - _browse_cache["fetched_at"]) < _BROWSE_CACHE_TTL:
+        return _browse_cache["jobs"]
+
+    jobs: list[dict] = []
+    if PINECONE_API_KEY:
+        try:
+            jobs = _fetch_all_jobs_from_pinecone()
+        except Exception as exc:
+            log.warning("browse: Pinecone fetch failed: %s", exc)
+
+    # Fall back to broad semantic searches covering common roles if Pinecone list fails
+    if not jobs:
+        seen: set[str] = set()
+        broad_queries = [
+            "software engineer developer", "data scientist analyst",
+            "product manager designer", "marketing sales operations",
+            "finance accounting hr", "devops cloud infrastructure",
+        ]
+        for bq in broad_queries:
+            for c in search_jobs(bq, top_k=50):
+                key = f"{c.get('title','')}|{c.get('company','')}"
+                if key not in seen:
+                    seen.add(key)
+                    jobs.append(c)
+
+    _browse_cache["jobs"] = jobs
+    _browse_cache["fetched_at"] = now
+    log.info("browse: cache refreshed with %d jobs", len(jobs))
+    return jobs
+
+
 @app.get("/jobs/browse", dependencies=[Depends(verify_api_key)])
 @limiter.limit("30/minute")
 async def browse_jobs(
@@ -2045,24 +2141,56 @@ async def browse_jobs(
     q: str = "",
     work_type: str = "",
     location: str = "",
+    salary_min: int = 0,
+    experience_years: int = -1,
+    industry: str = "",
     page: int = 0,
-    page_size: int = 20,
+    page_size: int = 18,
 ):
-    """Return a paginated list of jobs from the index without requiring a user profile."""
-    query = q.strip() if q.strip() else "software engineer developer analyst"
-    top_k = min(100, max(page_size, 50))
-    candidates = search_jobs_cached(query, top_k=top_k)
+    """Return a paginated, filterable list of all indexed jobs."""
+    candidates = await asyncio.to_thread(_get_browse_jobs)
 
-    # Apply optional filters
+    # If a keyword query is given, do a semantic search instead of returning all
+    if q.strip():
+        candidates = search_jobs_cached(q.strip(), top_k=500)
+
+    # ── Filters ──────────────────────────────────────────
     if work_type:
         wt_lower = work_type.lower()
         candidates = [c for c in candidates if wt_lower in (c.get("work_type") or "").lower()]
+
     if location:
         loc_lower = location.lower()
         candidates = [
             c for c in candidates
             if loc_lower in (c.get("location") or "").lower()
             or loc_lower in (c.get("country") or "").lower()
+        ]
+
+    if salary_min > 0:
+        filtered = []
+        for c in candidates:
+            extracted = _extract_salary_min(_safe_str(c.get("salary", "")))
+            if extracted == 0 or extracted >= salary_min:
+                filtered.append(c)
+        candidates = filtered
+
+    if experience_years >= 0:
+        filtered = []
+        for c in candidates:
+            raw_exp = _safe_str(c.get("experience", ""))
+            m = re.search(r"(\d+)", raw_exp)
+            if not m or int(m.group(1)) <= experience_years + 2:
+                filtered.append(c)
+        candidates = filtered
+
+    if industry:
+        ind_lower = industry.lower()
+        candidates = [
+            c for c in candidates
+            if ind_lower in (c.get("industry") or "").lower()
+            or ind_lower in (c.get("sector") or "").lower()
+            or ind_lower in (c.get("title") or "").lower()
         ]
 
     total = len(candidates)
@@ -2079,12 +2207,11 @@ async def browse_jobs(
             "work_type": job.get("work_type", ""),
             "salary": job.get("salary", ""),
             "experience": job.get("experience", ""),
-            "skills": job.get("skills", [])[:10],
+            "skills": (job.get("skills") or [])[:10],
             "description": (job.get("description") or "")[:300],
             "industry": job.get("industry", ""),
             "source": job.get("source", ""),
             "external_url": job.get("external_url", ""),
-            "score": job.get("score", 0),
         })
 
     return {

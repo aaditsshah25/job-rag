@@ -2396,7 +2396,7 @@ const browseJobsPanel = document.getElementById('browseJobsPanel');
 const browseJobsBtn   = document.getElementById('browseJobsBtn');
 const backFromBrowseBtn = document.getElementById('backFromBrowseBtn');
 
-let browseState = { page: 0, q: '', workType: '', location: '', loading: false };
+let browseState = { page: 0, q: '', workType: '', location: '', salaryMin: 0, experienceYears: -1, loading: false };
 
 function openBrowseJobsView() {
   if (!appMain || !browseJobsPanel || !profilePanel || !resultsPanel) return;
@@ -2494,10 +2494,12 @@ async function fetchAndRenderBrowseJobs() {
   const pageInfo  = document.getElementById('browsePageInfo');
   const prevBtn   = document.getElementById('browsePrevBtn');
   const nextBtn   = document.getElementById('browseNextBtn');
+  const countEl   = document.getElementById('browseResultsCount');
 
   stateEl?.classList.add('hidden');
   gridEl?.classList.add('hidden');
   paginEl?.classList.add('hidden');
+  if (countEl) countEl.classList.add('hidden');
   loadingEl?.classList.remove('hidden');
 
   const params = new URLSearchParams({
@@ -2507,6 +2509,8 @@ async function fetchAndRenderBrowseJobs() {
   if (browseState.q) params.set('q', browseState.q);
   if (browseState.workType) params.set('work_type', browseState.workType);
   if (browseState.location) params.set('location', browseState.location);
+  if (browseState.salaryMin > 0) params.set('salary_min', browseState.salaryMin);
+  if (browseState.experienceYears >= 0) params.set('experience_years', browseState.experienceYears);
 
   try {
     const token = AUTH.getToken();
@@ -2527,13 +2531,17 @@ async function fetchAndRenderBrowseJobs() {
         stateEl.classList.remove('hidden');
       }
     } else {
+      if (countEl) {
+        countEl.textContent = `${data.total.toLocaleString()} job${data.total !== 1 ? 's' : ''} found`;
+        countEl.classList.remove('hidden');
+      }
       if (gridEl) {
         gridEl.innerHTML = data.jobs.map((job, i) => renderBrowseJobCard(job, i)).join('');
         gridEl.classList.remove('hidden');
       }
 
       // Pagination
-      const totalPages = Math.ceil(data.total / 18);
+      const totalPages = Math.max(1, Math.ceil(data.total / 18));
       const currentPage = data.page + 1;
       if (paginEl && pageInfo && prevBtn && nextBtn) {
         pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
@@ -2564,11 +2572,28 @@ browseJobsBtn?.addEventListener('click', () => {
 
 backFromBrowseBtn?.addEventListener('click', closeBrowseJobsView);
 
+function readBrowseFilters() {
+  browseState.q              = document.getElementById('browseSearchInput')?.value.trim() || '';
+  browseState.workType       = document.getElementById('browseWorkTypeFilter')?.value || '';
+  browseState.location       = document.getElementById('browseLocationFilter')?.value.trim() || '';
+  browseState.salaryMin      = parseInt(document.getElementById('browseSalaryFilter')?.value || '0', 10) || 0;
+  browseState.experienceYears = parseInt(document.getElementById('browseExperienceFilter')?.value ?? '-1', 10);
+  browseState.page           = 0;
+}
+
 document.getElementById('browseSearchBtn')?.addEventListener('click', () => {
-  browseState.q        = document.getElementById('browseSearchInput')?.value.trim() || '';
-  browseState.workType = document.getElementById('browseWorkTypeFilter')?.value || '';
-  browseState.location = document.getElementById('browseLocationFilter')?.value.trim() || '';
-  browseState.page     = 0;
+  readBrowseFilters();
+  fetchAndRenderBrowseJobs();
+});
+
+document.getElementById('browseClearBtn')?.addEventListener('click', () => {
+  const ids = ['browseSearchInput', 'browseLocationFilter', 'browseSalaryFilter'];
+  ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  const wt = document.getElementById('browseWorkTypeFilter');
+  if (wt) wt.value = '';
+  const exp = document.getElementById('browseExperienceFilter');
+  if (exp) exp.value = '-1';
+  browseState = { page: 0, q: '', workType: '', location: '', salaryMin: 0, experienceYears: -1, loading: false };
   fetchAndRenderBrowseJobs();
 });
 
