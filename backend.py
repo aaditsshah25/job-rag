@@ -809,6 +809,11 @@ def index_dataset(force: bool = False) -> int:
             log.info("Index already has %d vectors; skipping re-index.", stats.total_vector_count)
             return stats.total_vector_count
 
+    if force:
+        log.info("Force re-index: deleting all existing vectors...")
+        index.delete(delete_all=True)
+        log.info("Index cleared.")
+
     mode = INDEX_MODE if INDEX_MODE in {"csv_only", "live_only", "hybrid"} else "hybrid"
     jobs: list[dict] = []
 
