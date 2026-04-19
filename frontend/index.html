@@ -431,6 +431,38 @@
     </div>
   </div>
 
+  <!-- Job Details Modal -->
+  <div id="jobDetailsModal" class="modal-overlay hidden">
+    <div class="modal-box modal-box-wide">
+      <div class="modal-header">
+        <h3 id="jobDetailsTitle">Job Details</h3>
+        <button class="modal-close" id="closeJobDetails">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="job-details-grid">
+          <div class="job-details-item"><strong>Role</strong><p id="jobDetailsRole">Not specified</p></div>
+          <div class="job-details-item"><strong>Location</strong><p id="jobDetailsLocation">Not specified</p></div>
+          <div class="job-details-item"><strong>Salary</strong><p id="jobDetailsSalary">Not specified</p></div>
+        </div>
+        <div class="job-details-item">
+          <strong>Why You're Suited</strong>
+          <div id="jobDetailsWhy"></div>
+        </div>
+        <div class="job-details-item">
+          <strong>Job Description</strong>
+          <p id="jobDetailsDescription">Not available</p>
+        </div>
+        <div class="job-details-item">
+          <strong>Job Posting Link</strong>
+          <a id="jobDetailsLink" href="#" target="_blank" rel="noopener noreferrer"></a>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="closeJobDetailsBtn">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Retrieval Debug Modal -->
   <div id="retrievalDebugModal" class="modal-overlay hidden">
     <div class="modal-box">

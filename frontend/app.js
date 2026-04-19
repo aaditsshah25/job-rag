@@ -1001,6 +1001,16 @@ const coverLetterContent = document.getElementById('coverLetterContent');
 const closeCoverLetter = document.getElementById('closeCoverLetter');
 const closeCoverLetterBtn = document.getElementById('closeCoverLetterBtn');
 const copyCoverLetter = document.getElementById('copyCoverLetter');
+const jobDetailsModal = document.getElementById('jobDetailsModal');
+const jobDetailsTitle = document.getElementById('jobDetailsTitle');
+const jobDetailsRole = document.getElementById('jobDetailsRole');
+const jobDetailsLocation = document.getElementById('jobDetailsLocation');
+const jobDetailsSalary = document.getElementById('jobDetailsSalary');
+const jobDetailsWhy = document.getElementById('jobDetailsWhy');
+const jobDetailsDescription = document.getElementById('jobDetailsDescription');
+const jobDetailsLink = document.getElementById('jobDetailsLink');
+const closeJobDetails = document.getElementById('closeJobDetails');
+const closeJobDetailsBtn = document.getElementById('closeJobDetailsBtn');
 const openGmailDraftBtn = document.getElementById('openGmailDraftBtn');
 
 function openCoverLetterModal(text, recruiterEmail) {
@@ -1026,6 +1036,49 @@ copyCoverLetter?.addEventListener('click', () => {
     copyCoverLetter.textContent = 'Copied!';
     setTimeout(() => { copyCoverLetter.textContent = 'Copy to Clipboard'; }, 2000);
   });
+});
+
+function openJobDetailsModal(details) {
+  if (jobDetailsTitle) {
+    const companySuffix = details.company ? ` @ ${details.company}` : '';
+    jobDetailsTitle.textContent = `${details.title || 'Job details'}${companySuffix}`;
+  }
+  if (jobDetailsRole) jobDetailsRole.textContent = details.role || 'Not specified';
+  if (jobDetailsLocation) jobDetailsLocation.textContent = details.location || 'Not specified';
+  if (jobDetailsSalary) jobDetailsSalary.textContent = details.salary || 'Not specified';
+  if (jobDetailsWhy) {
+    const reasons = (details.why || '')
+      .split('|')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 5);
+    jobDetailsWhy.innerHTML = reasons.length
+      ? `<ul>${reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`
+      : '<p>Not available</p>';
+  }
+  if (jobDetailsDescription) jobDetailsDescription.textContent = details.description || 'Not available';
+  if (jobDetailsLink) {
+    if (details.link && /^https?:\/\//i.test(details.link)) {
+      jobDetailsLink.href = details.link;
+      jobDetailsLink.textContent = details.link;
+      jobDetailsLink.classList.remove('hidden');
+    } else {
+      jobDetailsLink.href = '#';
+      jobDetailsLink.textContent = 'Not provided';
+      jobDetailsLink.classList.add('hidden');
+    }
+  }
+  jobDetailsModal?.classList.remove('hidden');
+}
+
+function closeJobDetailsModal() {
+  jobDetailsModal?.classList.add('hidden');
+}
+
+closeJobDetails?.addEventListener('click', closeJobDetailsModal);
+closeJobDetailsBtn?.addEventListener('click', closeJobDetailsModal);
+jobDetailsModal?.addEventListener('click', (e) => {
+  if (e.target === jobDetailsModal) closeJobDetailsModal();
 });
 
 openGmailDraftBtn?.addEventListener('click', () => {
@@ -1463,12 +1516,17 @@ function renderJobCard(job, rank) {
   }
 
   const lines = job.content.split('\n');
-  let matchScore = '', location = '', salary = '';
+  let matchScore = '', location = '', salary = '', role = '', applyLink = '';
   const reasons = [], gaps = [], actions = [];
   let experience = '';
   let currentList = null;
-  let jobDescription = '';
   let recruiterEmail = '';
+  const jobDescriptionParts = [];
+
+  const parseLabeled = (text, label) => {
+    const m = text.match(new RegExp(`^[-*]\\s*\\**${label}:\\s*(.+)$`, 'i'));
+    return m ? m[1].trim() : '';
+  };
 
   for (const line of lines) {
     const raw = line.trim();
@@ -1476,11 +1534,22 @@ function renderJobCard(job, rank) {
     const clean = raw.replace(/\*\*/g, '');
 
     if ((clean.toLowerCase().includes('match score') || clean.toLowerCase().includes('match:')) && clean.includes('/10')) {
-      const scoreM = clean.match(/(\d+)\/10/); if (scoreM) matchScore = scoreM[1];
+      const scoreM = clean.match(/(\d+(?:\.\d+)?)\/10/); if (scoreM) matchScore = String(Math.round(parseFloat(scoreM[1])));
       const locM = clean.match(/Location:\s*([^|]+)/i); if (locM) location = locM[1].trim();
       const salM = clean.match(/Salary:\s*([^|]+)/i); if (salM) salary = salM[1].trim();
       continue;
     }
+
+    const lineLocation = parseLabeled(clean, 'Location');
+    if (lineLocation && !location) { location = lineLocation; continue; }
+    const lineSalary = parseLabeled(clean, 'Salary');
+    if (lineSalary && !salary) { salary = lineSalary; continue; }
+    const lineRole = parseLabeled(clean, 'Role');
+    if (lineRole && !role) { role = lineRole; continue; }
+    const lineApply = parseLabeled(clean, 'Apply Link');
+    if (lineApply && /https?:\/\//i.test(lineApply)) { applyLink = lineApply; continue; }
+    const lineDesc = parseLabeled(clean, 'Job Description');
+    if (lineDesc) { jobDescriptionParts.push(lineDesc); continue; }
 
     if (clean.toLowerCase().includes('action step') || clean.toLowerCase().includes('quick action') || clean.toLowerCase().includes('next step') || clean.toLowerCase().includes('recommended next')) {
       currentList = 'actions'; continue;
@@ -1512,14 +1581,23 @@ function renderJobCard(job, rank) {
       if (afterColon) { actions.push(afterColon); continue; }
     }
 
-    // Capture description-like content for cover letter context
     if (currentList === 'reasons' && clean.length > 20) {
-      jobDescription += clean + ' ';
+      reasons.push(clean);
+      continue;
+    }
+
+    if (clean.length > 30 && !/^[-*]/.test(clean) && !/^(Why It Matches|Gaps|Recommended Next Steps|Experience Alignment)\b/i.test(clean)) {
+      jobDescriptionParts.push(clean);
     }
   }
 
   const emailMatch = (job.content || '').match(/\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b/i);
   if (emailMatch) recruiterEmail = emailMatch[0];
+  if (!applyLink) {
+    const linkMatch = (job.content || '').match(/https?:\/\/[^\s)]+/i);
+    if (linkMatch) applyLink = linkMatch[0];
+  }
+  const jobDescription = jobDescriptionParts.join(' ').trim();
 
   const score = parseInt(matchScore) || 0;
   const scoreClass = score >= 8 ? 'score-high' : score >= 6 ? 'score-mid' : 'score-low';
@@ -1528,9 +1606,12 @@ function renderJobCard(job, rank) {
   // Build plain text for copy-to-clipboard
   let copyText = `${jobTitle}`;
   if (company) copyText += ` @ ${company}`;
+  if (role) copyText += `\nRole: ${role}`;
   copyText += `\nMatch Score: ${matchScore}/10`;
   if (location) copyText += `\nLocation: ${location}`;
   if (salary) copyText += `\nSalary: ${salary}`;
+  if (applyLink) copyText += `\nApply Link: ${applyLink}`;
+  if (jobDescription) copyText += `\nJob Description: ${jobDescription}`;
   if (reasons.length) copyText += `\n\nWhy it matches:\n${reasons.map(r => '• ' + r).join('\n')}`;
   if (gaps.length) copyText += `\n\nGaps:\n${gaps.map(g => '• ' + g).join('\n')}`;
   if (experience) copyText += `\n\nExperience: ${experience}`;
@@ -1562,9 +1643,20 @@ function renderJobCard(job, rank) {
   html += `<button class="card-cover-letter-btn" title="Generate cover letter"
     data-cl-title="${esc(jobTitle)}"
     data-cl-company="${esc(company)}"
-    data-cl-desc="${esc(jobDescription.trim().slice(0, 300))}"
+    data-cl-desc="${esc(jobDescription.trim().slice(0, 1200))}"
     data-cl-email="${esc(recruiterEmail)}">
     Cover Letter
+  </button>`;
+  html += `<button class="card-details-btn" title="View full job details"
+    data-details-title="${esc(jobTitle)}"
+    data-details-company="${esc(company)}"
+    data-details-role="${esc(role)}"
+    data-details-location="${esc(location)}"
+    data-details-salary="${esc(salary)}"
+    data-details-link="${esc(applyLink)}"
+    data-details-desc="${esc(jobDescription.trim().slice(0, 2200))}"
+    data-details-why="${esc(reasons.join(' | '))}">
+    Details
   </button>`;
 
   const appState = applicationStatusByKey.get(appKey(jobTitle, company));
@@ -1594,7 +1686,7 @@ function renderJobCard(job, rank) {
     data-bookmark-location="${esc(location)}"
     data-bookmark-salary="${esc(salary)}"
     data-bookmark-score="${score}"
-    data-bookmark-description="${esc(jobDescription.trim().slice(0, 350))}">
+    data-bookmark-description="${esc(jobDescription.trim().slice(0, 550))}">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="${isBookmarked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
   </button>`;
 
@@ -1610,11 +1702,20 @@ function renderJobCard(job, rank) {
   html += '<div class="job-card-body">';
 
   // Meta chips
-  if (location || salary) {
+  if (role || location || salary) {
     html += '<div class="job-meta">';
+    if (role) html += `<span class="meta-chip"><svg class="meta-svg" viewBox="0 0 20 20" fill="currentColor"><path d="M3 5a2 2 0 0 1 2-2h3v2h4V3h3a2 2 0 0 1 2 2v2H3V5z"/><path d="M3 9h14v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9z"/></svg>${esc(role)}</span>`;
     if (location) html += `<span class="meta-chip"><svg class="meta-svg" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>${esc(location)}</span>`;
     if (salary) html += `<span class="meta-chip"><svg class="meta-svg" viewBox="0 0 20 20" fill="currentColor"><path d="M8.433 7.418c.155-.103.346-.196.567-.267v1.698a2.305 2.305 0 01-.567-.267C8.07 8.34 8 8.114 8 8c0-.114.07-.34.433-.582zM11 12.849v-1.698c.22.071.412.164.567.267.364.243.433.468.433.582 0 .114-.07.34-.433.582a2.305 2.305 0 01-.567.267z"/><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-13a1 1 0 10-2 0v.092a4.535 4.535 0 00-1.676.662C6.602 6.234 6 7.009 6 8c0 .99.602 1.765 1.324 2.246.48.32 1.054.545 1.676.662v1.941c-.391-.127-.68-.317-.843-.504a1 1 0 10-1.51 1.31c.562.649 1.413 1.076 2.353 1.253V15a1 1 0 102 0v-.092a4.535 4.535 0 001.676-.662C13.398 13.766 14 12.991 14 12c0-.99-.602-1.765-1.324-2.246A4.535 4.535 0 0011 9.092V7.151c.391.127.68.317.843.504a1 1 0 101.511-1.31c-.563-.649-1.413-1.076-2.354-1.253V5z" clip-rule="evenodd"/></svg>${esc(salary)}</span>`;
     html += '</div>';
+  }
+
+  if (jobDescription) {
+    html += `<div class="job-description-preview">${esc(jobDescription.slice(0, 280))}${jobDescription.length > 280 ? '…' : ''}</div>`;
+  }
+
+  if (applyLink) {
+    html += `<a class="job-link-inline" href="${esc(applyLink)}" target="_blank" rel="noopener noreferrer">Open Job Posting</a>`;
   }
 
   // Why it matches
@@ -1700,6 +1801,7 @@ function wireCardInteractions() {
       if (e.target.closest('.card-cover-letter-btn')) return;
       if (e.target.closest('.card-apply-btn')) return;
       if (e.target.closest('.card-tailor-btn')) return;
+      if (e.target.closest('.card-details-btn')) return;
       const card = header.closest('.job-card');
       if (card) card.classList.toggle('collapsed');
     });
@@ -1755,6 +1857,23 @@ function wireCardInteractions() {
       const desc = btn.getAttribute('data-cl-desc') || '';
       const recruiterEmail = btn.getAttribute('data-cl-email') || '';
       await generateCoverLetter(title, company, desc, recruiterEmail);
+    });
+  });
+
+  // Job details buttons
+  document.querySelectorAll('.card-details-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openJobDetailsModal({
+        title: btn.getAttribute('data-details-title') || '',
+        company: btn.getAttribute('data-details-company') || '',
+        role: btn.getAttribute('data-details-role') || '',
+        location: btn.getAttribute('data-details-location') || '',
+        salary: btn.getAttribute('data-details-salary') || '',
+        link: btn.getAttribute('data-details-link') || '',
+        description: btn.getAttribute('data-details-desc') || '',
+        why: btn.getAttribute('data-details-why') || '',
+      });
     });
   });
 

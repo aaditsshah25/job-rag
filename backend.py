@@ -1098,6 +1098,9 @@ OUTPUT FORMAT — copy this structure EXACTLY:
 
 ### <Job Title> @ <Company Name>
 - **Match Score: <N>/10 | Location: <City, Country> | Salary: <range>**
+- **Role:** <specific role level/team if known>
+- **Apply Link:** <URL if available, else "Not provided">
+- **Job Description:** <1-2 sentence factual summary from provided data>
 
 **Why It Matches:**
 - <Specific skill or experience from user profile that maps to this job>
@@ -1144,6 +1147,7 @@ def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
             f"Company: {c.get('company', '')} | Sector: {c.get('sector', '')} | Industry: {c.get('industry', '')}\n"
             f"Location: {c.get('location', '')}, {c.get('country', '')} | Work Type: {c.get('work_type', '')}\n"
             f"Salary: {c.get('salary', '')} | Experience Required: {c.get('experience', '')} | Qualifications: {c.get('qualifications', '')}\n"
+            f"Apply URL: {c.get('external_url', '')}\n"
             f"Company Size: {c.get('company_size', '')}\n"
             f"Required Skills: {skills}\n"
             f"Benefits: {benefits}\n"
@@ -1182,6 +1186,9 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
                 f"- Match Score: {round((c.get('score', 0) or 0) * 10, 1)}/10",
                 f"- Location: {location}",
                 f"- Salary: {salary}",
+                f"- Role: {c.get('role', '') or 'Not specified'}",
+                f"- Apply Link: {c.get('external_url', '') or 'Not provided'}",
+                f"- Job Description: {(c.get('description', '') or 'Not provided')[:220]}",
                 f"- Skills: {skills}",
                 "",
             ])
@@ -1428,21 +1435,26 @@ async def generate_cover_letter(req: CoverLetterRequest):
         applicant = req.profile.name or "the candidate"
         role = req.jobTitle or "the role"
         company = req.company or "your company"
-        tone = (req.tone or "professional").strip().lower()
-        opener = {
-            "friendly": f"I am excited to apply for the {role} position at {company}.",
-            "concise": f"I am applying for the {role} role at {company}.",
-        }.get(tone, f"I am writing to express my interest in the {role} position at {company}.")
+        current_hour = datetime.now().hour
+        if current_hour < 12:
+            greeting = "Good morning"
+        elif current_hour < 17:
+            greeting = "Good afternoon"
+        else:
+            greeting = "Good evening"
+        jd_context = (req.jobDescription or "").strip()
+        jd_line = f"I was especially drawn to this opportunity because {jd_context[:180]}." if jd_context else ""
         body = (
-            f"{opener}\n\n"
-            f"I bring {max(req.profile.experience, 0)} years of experience and practical skills in {skills_str}. "
-            f"My background aligns well with the responsibilities typically expected for this role. "
-            f"I focus on reliable execution, clear communication, and measurable outcomes.\n\n"
-            f"Thank you for considering {applicant}. I would value the chance to discuss how I can contribute to {company}."
+            f"{greeting} Hiring Team at {company},\n\n"
+            f"I'm writing to express my interest in the {role} position. I bring {max(req.profile.experience, 0)} years of experience and hands-on strength in {skills_str}.\n\n"
+            f"My background combines reliable delivery, clear communication, and measurable business outcomes. {jd_line}\n\n"
+            f"Thank you for your time and consideration. I would welcome the opportunity to discuss how I can contribute to your team.\n\n"
+            f"Best regards,\n"
+            f"{applicant}"
         )
         return {"cover_letter": body, "mode": "basic"}
 
-    prompt = f"""Write a compelling 3-paragraph cover letter for {req.profile.name or 'the applicant'} applying to the {req.jobTitle} position at {req.company}.
+    prompt = f"""Write a strong, human cover letter for {req.profile.name or 'the applicant'} applying to the {req.jobTitle} position at {req.company}.
 
 Applicant profile:
 - Experience: {req.profile.experience} years
@@ -1454,7 +1466,15 @@ Job description context: {req.jobDescription[:500] if req.jobDescription else 'N
 
 Tone: {req.tone}
 
-Write exactly 3 paragraphs: (1) opening hook with role and key qualification, (2) specific skills and experiences that match the role, (3) closing with enthusiasm and call to action. Do NOT include subject line, date, address blocks, or "Dear Hiring Manager" header - start directly with the first paragraph."""
+Formatting requirements:
+- Start with a time-appropriate greeting line in this exact style: "Good morning/afternoon/evening Hiring Team at <Company>,"
+- Then write 2 concise body paragraphs.
+- Include concrete strengths, role fit, and value to the team.
+- End with a brief closing and signature exactly:
+  Best regards,
+  <Applicant Name>
+- Do NOT include subject line, date, postal address, or placeholders like [Company].
+- Keep it natural and specific, not generic."""
 
     model = get_gemini()
     response = model.generate_content(
