@@ -1469,6 +1469,7 @@ async def debug_retrieval(request: Request, req: DebugRetrievalRequest):
         "top_k": top_k,
         "count": len(compact),
         "candidates": compact,
+        "jobs": compact,
     }
 
 
