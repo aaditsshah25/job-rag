@@ -4170,7 +4170,21 @@ body::after {
 }
 
 .browse-clear-btn {
+  background: var(--bg-card);
+  background-image: none;
   color: var(--text-muted);
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-xs);
+  width: auto;
+  margin-top: 0;
+}
+
+.browse-clear-btn:hover {
+  background: var(--bg-section);
+  border-color: var(--accent);
+  color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-muted);
+  transform: none;
 }
 
 /* ── Results count ── */
