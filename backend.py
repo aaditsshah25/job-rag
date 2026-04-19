@@ -2170,19 +2170,17 @@ async def browse_jobs(
 ):
     """Return a paginated, filterable list of all indexed jobs."""
     if q.strip():
-        # Keyword search: semantic search via embedding + Pinecone
-        candidates = await asyncio.to_thread(search_jobs_cached, q.strip(), 500)
-        # If semantic search yields nothing, fall back to text-match on the full cached list
-        if not candidates:
-            all_jobs = await asyncio.to_thread(_get_browse_jobs)
-            q_lower = q.strip().lower()
-            candidates = [
-                c for c in all_jobs
-                if q_lower in (c.get("title") or "").lower()
-                or q_lower in (c.get("company") or "").lower()
-                or q_lower in (c.get("description") or "").lower()
-                or any(q_lower in s.lower() for s in (c.get("skills") or []))
-            ]
+        q_lower = q.strip().lower()
+        # Exact text-match against all cached jobs — only return jobs that actually contain the query
+        all_jobs = await asyncio.to_thread(_get_browse_jobs)
+        candidates = [
+            c for c in all_jobs
+            if q_lower in (c.get("title") or "").lower()
+            or q_lower in (c.get("company") or "").lower()
+            or q_lower in (c.get("role") or "").lower()
+            or q_lower in (c.get("description") or "").lower()
+            or any(q_lower in s.lower() for s in (c.get("skills") or []))
+        ]
     else:
         # No keyword: return full cached job list
         candidates = await asyncio.to_thread(_get_browse_jobs)
