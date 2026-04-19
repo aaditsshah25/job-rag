@@ -108,7 +108,17 @@ RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
 if _RESEND_AVAILABLE and RESEND_API_KEY:
     resend_lib.api_key = RESEND_API_KEY
-GOOGLE_CLIENT_ID  = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_ID  = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+
+def _is_valid_google_client_id(value: str) -> bool:
+    return bool(re.match(r"^\d+-[a-z0-9\-]+\.apps\.googleusercontent\.com$", value or "", re.IGNORECASE))
+
+GOOGLE_CLIENT_ID_VALID = _is_valid_google_client_id(GOOGLE_CLIENT_ID)
+if GOOGLE_CLIENT_ID and not GOOGLE_CLIENT_ID_VALID:
+    log.error(
+        "GOOGLE_CLIENT_ID appears malformed. Check Railway/Vercel env value. Current value: %s",
+        GOOGLE_CLIENT_ID,
+    )
 JWT_SECRET        = os.getenv("JWT_SECRET", "").strip()
 if not JWT_SECRET:
     _is_production = os.getenv("ENVIRONMENT", "").strip().lower() in ("production", "prod")
@@ -694,15 +704,18 @@ def _verify_google_credential(credential: str) -> dict:
     if not credential:
         raise HTTPException(status_code=401, detail="Google credential is missing")
 
+    if GOOGLE_CLIENT_ID and not GOOGLE_CLIENT_ID_VALID:
+        raise HTTPException(status_code=503, detail="Google SSO is misconfigured on server")
+
     if _GOOGLE_AUTH_AVAILABLE:
         try:
-            audience = GOOGLE_CLIENT_ID or None
+            audience = GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID_VALID else None
             token_payload = google_id_token.verify_oauth2_token(
                 credential,
                 google_requests.Request(),
                 audience=audience,
             )
-            if GOOGLE_CLIENT_ID and token_payload.get("aud") != GOOGLE_CLIENT_ID:
+            if GOOGLE_CLIENT_ID_VALID and token_payload.get("aud") != GOOGLE_CLIENT_ID:
                 raise HTTPException(status_code=401, detail="Google credential audience mismatch")
             return token_payload
         except HTTPException:
@@ -1269,9 +1282,10 @@ async def health():
 
 @app.get("/auth/config")
 async def auth_config():
+    client_id = GOOGLE_CLIENT_ID if GOOGLE_CLIENT_ID_VALID else ""
     return {
-        "googleClientId": GOOGLE_CLIENT_ID,
-        "googleAuthEnabled": bool(GOOGLE_CLIENT_ID),
+        "googleClientId": client_id,
+        "googleAuthEnabled": bool(client_id),
     }
 
 

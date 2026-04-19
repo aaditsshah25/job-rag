@@ -68,6 +68,12 @@ function setAuthStatus(msg) {
   if (el) el.textContent = msg || '';
 }
 
+let googleConfigIssue = '';
+
+function isValidGoogleClientId(value) {
+  return /^\d+-[a-z0-9-]+\.apps\.googleusercontent\.com$/i.test((value || '').trim());
+}
+
 function setLandingHidden(isHidden) {
   document.querySelectorAll('[data-landing]').forEach((section) => {
     section.classList.toggle('landing-hidden', !!isHidden);
@@ -140,7 +146,15 @@ function handleAuthFailure(message = 'Your session expired. Please sign in again
 }
 
 async function resolveGoogleClientId() {
-  if (CONFIG.GOOGLE_CLIENT_ID) return CONFIG.GOOGLE_CLIENT_ID;
+  googleConfigIssue = '';
+
+  const staticClientId = (CONFIG.GOOGLE_CLIENT_ID || '').trim();
+  if (staticClientId) {
+    if (isValidGoogleClientId(staticClientId)) return staticClientId;
+    googleConfigIssue = 'Vercel GOOGLE_CLIENT_ID is malformed. Please update it in project environment variables.';
+    return '';
+  }
+
   try {
     const res = await fetch(CONFIG.API_BASE_URL + '/auth/config', {
       method: 'GET',
@@ -148,8 +162,18 @@ async function resolveGoogleClientId() {
     });
     if (!res.ok) return '';
     const data = await res.json();
-    return (data.googleClientId || '').trim();
+    const dynamicClientId = (data.googleClientId || '').trim();
+    if (!dynamicClientId) {
+      googleConfigIssue = 'Google SSO is not configured on the backend.';
+      return '';
+    }
+    if (!isValidGoogleClientId(dynamicClientId)) {
+      googleConfigIssue = 'Railway GOOGLE_CLIENT_ID is malformed. Please set the full Google OAuth client ID.';
+      return '';
+    }
+    return dynamicClientId;
   } catch {
+    googleConfigIssue = 'Unable to load Google SSO config from backend.';
     return '';
   }
 }
@@ -191,7 +215,7 @@ async function initGoogleGate() {
 
   const clientId = await resolveGoogleClientId();
   if (!clientId) {
-    setAuthStatus('Google SSO is not configured. Please set GOOGLE_CLIENT_ID.');
+    setAuthStatus(googleConfigIssue || 'Google SSO is not configured. Please set GOOGLE_CLIENT_ID.');
     return;
   }
 
