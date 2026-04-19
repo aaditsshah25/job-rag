@@ -260,14 +260,26 @@ let currentCoverLetterContext = null;
 const APP_TABS = ['all', 'saved', 'applied', 'interviewing', 'offered', 'rejected'];
 let activeApplicationsTab = 'all';
 
+function normalizeJobField(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sameJob(aTitle, aCompany, bTitle, bCompany) {
+  return normalizeJobField(aTitle) === normalizeJobField(bTitle)
+    && normalizeJobField(aCompany) === normalizeJobField(bCompany);
+}
+
 const AppState = {
   bookmarks: [],
   applications: [],
   isBookmarked(jobTitle, company) {
-    return this.bookmarks.some((b) => b.job_title === jobTitle && b.company === company);
+    return this.bookmarks.some((b) => sameJob(b.job_title, b.company, jobTitle, company));
   },
   getApplication(jobTitle, company) {
-    return this.applications.find((a) => a.job_title === jobTitle && a.company === company);
+    return this.applications.find((a) => sameJob(a.job_title, a.company, jobTitle, company));
   },
 };
 
@@ -928,7 +940,7 @@ async function deleteApplicationById(applicationId) {
 }
 
 async function removeSavedJob(jobTitle, company) {
-  const bookmark = AppState.bookmarks.find((b) => b.job_title === jobTitle && b.company === company);
+  const bookmark = AppState.bookmarks.find((b) => sameJob(b.job_title, b.company, jobTitle, company));
   const application = AppState.getApplication(jobTitle, company);
 
   if (bookmark?.id) {
@@ -938,8 +950,8 @@ async function removeSavedJob(jobTitle, company) {
     await deleteApplicationById(application.id);
   }
 
-  AppState.bookmarks = AppState.bookmarks.filter((b) => !(b.job_title === jobTitle && b.company === company));
-  AppState.applications = AppState.applications.filter((a) => !(a.job_title === jobTitle && a.company === company));
+  AppState.bookmarks = AppState.bookmarks.filter((b) => !sameJob(b.job_title, b.company, jobTitle, company));
+  AppState.applications = AppState.applications.filter((a) => !sameJob(a.job_title, a.company, jobTitle, company));
   applicationStatusByKey.delete(appKey(jobTitle, company));
   updateApplicationsBadge();
 }
@@ -1210,7 +1222,7 @@ async function openRetrievalDebug() {
 }
 
 function appKey(jobTitle, company) {
-  return `${(jobTitle || '').trim()}|${(company || '').trim()}`;
+  return `${normalizeJobField(jobTitle)}|${normalizeJobField(company)}`;
 }
 
 async function loadApplicationsForSession() {
@@ -1658,15 +1670,6 @@ function renderJobCard(job, rank) {
     Details
   </button>`;
 
-  const appState = applicationStatusByKey.get(appKey(jobTitle, company));
-  const appStatus = appState?.status || 'saved';
-  html += `<button class="card-apply-btn" title="Track application status"
-    data-app-title="${esc(jobTitle)}"
-    data-app-company="${esc(company)}"
-    data-app-status="${esc(appStatus)}">
-    Status: ${esc(appStatus)}
-  </button>`;
-
   // Tailor Resume button (only shown if resume was uploaded)
   if (lastResumeText) {
     html += `<button class="card-tailor-btn" title="Tailor your resume for this job"
@@ -1798,7 +1801,6 @@ function wireCardInteractions() {
       if (e.target.closest('[data-copy-card]')) return;
       if (e.target.closest('.card-bookmark-btn')) return;
       if (e.target.closest('.card-cover-letter-btn')) return;
-      if (e.target.closest('.card-apply-btn')) return;
       if (e.target.closest('.card-tailor-btn')) return;
       if (e.target.closest('.card-details-btn')) return;
       const card = header.closest('.job-card');
@@ -1840,7 +1842,6 @@ function wireCardInteractions() {
         const isBookmarked = saved && AppState.isBookmarked(title, company);
         btn.classList.toggle('bookmarked', isBookmarked);
         btn.querySelector('svg')?.setAttribute('fill', isBookmarked ? 'currentColor' : 'none');
-        applyApplicationStatusesToUI();
       } catch (err) {
         showToast(err.message || 'Could not update bookmark');
       }
@@ -1873,16 +1874,6 @@ function wireCardInteractions() {
         description: btn.getAttribute('data-details-desc') || '',
         why: btn.getAttribute('data-details-why') || '',
       });
-    });
-  });
-
-  // Application tracking
-  document.querySelectorAll('.card-apply-btn').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const title = btn.getAttribute('data-app-title') || '';
-      const company = btn.getAttribute('data-app-company') || '';
-      openApplicationStatusModal(title, company);
     });
   });
 
@@ -2451,7 +2442,7 @@ function renderMyApplicationsPage() {
 
 function renderApplicationCard(application, idx) {
   const status = normalizeStatus(application.status || 'saved');
-  const bookmark = AppState.bookmarks.find((b) => b.job_title === application.job_title && b.company === application.company);
+  const bookmark = AppState.bookmarks.find((b) => sameJob(b.job_title, b.company, application.job_title, application.company));
   const jobData = bookmark?.job_data || {};
   const location = jobData.location || bookmark?.location || 'Not specified';
   const salary = jobData.salary || bookmark?.salary || 'Not specified';
@@ -2745,7 +2736,7 @@ document.getElementById('browseJobsGrid')?.addEventListener('click', async (e) =
   const isBookmarked = AppState.isBookmarked(title, company);
 
   if (isBookmarked) {
-    const existing = AppState.bookmarks.find(b => b.job_title === title && b.company === company);
+    const existing = AppState.bookmarks.find(b => sameJob(b.job_title, b.company, title, company));
     if (existing?.bookmark_id) {
       try {
         await fetch(`${CONFIG.API_BASE_URL}/bookmarks/${existing.bookmark_id}`, {

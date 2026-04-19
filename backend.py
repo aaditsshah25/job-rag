@@ -1464,6 +1464,7 @@ async def generate_cover_letter(req: CoverLetterRequest):
         applicant = req.profile.name or "the candidate"
         role = req.jobTitle or "the role"
         company = req.company or "your company"
+        exp_years = max(req.profile.experience or 0, 0)
         current_hour = datetime.now().hour
         if current_hour < 12:
             greeting = "Good morning"
@@ -1471,13 +1472,27 @@ async def generate_cover_letter(req: CoverLetterRequest):
             greeting = "Good afternoon"
         else:
             greeting = "Good evening"
-        jd_context = (req.jobDescription or "").strip()
-        jd_line = f"I was especially drawn to this opportunity because {jd_context[:180]}." if jd_context else ""
+
+        jd_context = " ".join((req.jobDescription or "").split())
+        jd_excerpt = jd_context[:240] if jd_context else ""
+        role_fit_line = (
+            f"I bring {exp_years} years of hands-on experience with strong foundations in {skills_str}."
+            if exp_years > 0
+            else f"I come from a strong software and applied AI background, with hands-on experience in {skills_str}."
+        )
+        role_focus = (
+            f"I am particularly drawn to this opportunity because of its focus on {jd_excerpt}."
+            if jd_excerpt
+            else f"I am particularly drawn to this opportunity because it aligns closely with the kind of {role} work I want to keep building."
+        )
+
         body = (
             f"{greeting} Hiring Team at {company},\n\n"
-            f"I'm writing to express my interest in the {role} position. I bring {max(req.profile.experience, 0)} years of experience and hands-on strength in {skills_str}.\n\n"
-            f"My background combines reliable delivery, clear communication, and measurable business outcomes. {jd_line}\n\n"
-            f"Thank you for your time and consideration. I would welcome the opportunity to discuss how I can contribute to your team.\n\n"
+            f"I am excited to apply for the {role} role.\n\n"
+            f"{role_fit_line} My work has included building end-to-end products, backend APIs, and practical automation solutions that connect engineering execution with business outcomes.\n\n"
+            f"I focus on building systems that are both technically strong and usable in real workflows, from backend logic and data handling to product integration and delivery.\n\n"
+            f"{role_focus}\n\n"
+            f"Thank you for your time and consideration. I would be glad to discuss my background further.\n\n"
             f"Best regards,\n"
             f"{applicant}"
         )
@@ -1497,8 +1512,13 @@ Tone: {req.tone}
 
 Formatting requirements:
 - Start with a time-appropriate greeting line in this exact style: "Good morning/afternoon/evening Hiring Team at <Company>,"
-- Then write 2 concise body paragraphs.
+- Then follow this structure:
+  1) "I am excited to apply for the <Role> role."
+  2) A paragraph describing concrete technical strengths and relevant project experience.
+  3) A paragraph on engineering approach and delivery style.
+  4) A paragraph that explicitly explains why this specific role is compelling.
 - Include concrete strengths, role fit, and value to the team.
+- If experience years is 0 or unclear, DO NOT mention "0 years"; use early-career wording instead.
 - End with a brief closing and signature exactly:
   Best regards,
   <Applicant Name>
