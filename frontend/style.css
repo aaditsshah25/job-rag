@@ -4159,17 +4159,18 @@ body::after {
   width: 155px;
 }
 
-.browse-clear-btn {
-  white-space: nowrap;
-  padding: 9px 20px;
-  font-size: 0.875rem;
-  color: var(--text-muted);
-}
-
+.browse-clear-btn,
 .browse-go-btn {
   white-space: nowrap;
   padding: 9px 20px;
   font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.5;
+  height: auto;
+}
+
+.browse-clear-btn {
+  color: var(--text-muted);
 }
 
 /* ── Results count ── */
