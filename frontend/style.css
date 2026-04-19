@@ -161,6 +161,23 @@ body::after {
   gap: 8px;
 }
 
+.logo-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.logo-button:hover .logo-text {
+  opacity: 0.9;
+}
+
+.logo-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 10px;
+}
+
 .logo-icon {
   font-size: 1.3rem;
   line-height: 1;

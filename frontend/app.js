@@ -2240,6 +2240,13 @@ const myApplicationsPanel = document.getElementById('myApplicationsPanel');
 const myApplicationsBtn = document.getElementById('myApplicationsBtn');
 const backToSearchBtn = document.getElementById('backToSearchBtn');
 const findJobsBtn = document.getElementById('findJobsBtn');
+const homeBtn = document.getElementById('homeBtn');
+
+function goHomeToResumeUpload() {
+  closeBrowseJobsView();
+  closeMyApplicationsView();
+  profilePanel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 function hashCode(str) {
   let h = 0;
@@ -2509,6 +2516,7 @@ myApplicationsBtn?.addEventListener('click', async () => {
 
 backToSearchBtn?.addEventListener('click', closeMyApplicationsView);
 findJobsBtn?.addEventListener('click', closeMyApplicationsView);
+homeBtn?.addEventListener('click', goHomeToResumeUpload);
 
 // ─── BROWSE JOBS VIEW ────────────────────────────────
 const browseJobsPanel = document.getElementById('browseJobsPanel');
