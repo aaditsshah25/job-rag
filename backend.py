@@ -2193,14 +2193,11 @@ async def browse_jobs(
 
     # ── Filters ──────────────────────────────────────────
     if work_type:
-        # work_type in CSV = employment type: "Full-Time", "Part-Time", "Intern", "Temporary", "Contract"
-        # Also handle remote/hybrid/on-site if stored in metadata from live sources
-        wt_lower = work_type.lower()
+        # Exact match against CSV values: Full-Time, Part-Time, Contract, Intern, Temporary
+        wt_lower = work_type.strip().lower()
         candidates = [
             c for c in candidates
-            if wt_lower in (c.get("work_type") or "").lower()
-            or (wt_lower == "full-time" and "full time" in (c.get("work_type") or "").lower())
-            or (wt_lower == "part-time" and "part time" in (c.get("work_type") or "").lower())
+            if (c.get("work_type") or "").strip().lower() == wt_lower
         ]
 
     if location:
