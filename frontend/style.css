@@ -2397,13 +2397,13 @@ input[type="range"]::-moz-range-thumb {
   text-align: center;
   padding: var(--space-2xl) var(--space-lg);
   background:
-    radial-gradient(700px 360px at 18% -5%, rgba(79, 110, 247, 0.14), transparent 58%),
-    radial-gradient(640px 320px at 88% 8%, rgba(14, 196, 164, 0.12), transparent 56%),
+    radial-gradient(700px 360px at 18% -5%, rgba(79, 110, 247, 0.08), transparent 58%),
+    radial-gradient(640px 320px at 88% 8%, rgba(14, 196, 164, 0.07), transparent 56%),
     var(--bg-body);
 }
 
 .landing-hero-inner {
-  max-width: 900px;
+  max-width: 860px;
   margin: 0 auto;
 }
 
@@ -2420,9 +2420,9 @@ input[type="range"]::-moz-range-thumb {
 }
 
 #landing-hero p {
-  font-size: 1rem;
+  font-size: 1.02rem;
   color: var(--text-secondary);
-  max-width: 760px;
+  max-width: 720px;
   margin: 0 auto var(--space-xl);
 }
 
@@ -2451,12 +2451,12 @@ input[type="range"]::-moz-range-thumb {
 }
 
 #landing-features {
-  background: var(--bg-section);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.42), rgba(255, 255, 255, 0.12));
   padding: var(--space-3xl) var(--space-lg);
 }
 
 #landing-how {
-  background: var(--bg-card);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0.38));
   padding: var(--space-3xl) var(--space-lg);
 }
 
@@ -2476,6 +2476,24 @@ input[type="range"]::-moz-range-thumb {
   margin-bottom: var(--space-xl);
 }
 
+.landing-section-head h2 {
+  position: relative;
+  display: inline-block;
+  padding-bottom: 12px;
+}
+
+.landing-section-head h2::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 56px;
+  height: 2px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+}
+
 .landing-section-head h2,
 #landing-cta h2 {
   font-family: 'Manrope', 'Segoe UI', sans-serif;
@@ -2492,11 +2510,12 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .landing-feature-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(79, 110, 247, 0.12);
+  border-radius: calc(var(--radius-lg) + 2px);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.04);
   padding: var(--space-xl);
+  backdrop-filter: blur(8px);
 }
 
 .landing-feature-icon {
@@ -2539,7 +2558,7 @@ input[type="range"]::-moz-range-thumb {
   right: calc(16.666% + 20px);
   top: 20px;
   height: 1px;
-  background: var(--border-medium);
+  background: linear-gradient(90deg, transparent, rgba(79, 110, 247, 0.18), transparent);
   z-index: 0;
 }
 
@@ -2548,6 +2567,10 @@ input[type="range"]::-moz-range-thumb {
   z-index: 1;
   text-align: center;
   padding: var(--space-lg) var(--space-md);
+  background: rgba(255, 255, 255, 0.64);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.035);
 }
 
 .landing-step-number {
@@ -2555,7 +2578,7 @@ input[type="range"]::-moz-range-thumb {
   height: 40px;
   border-radius: 50%;
   margin: 0 auto var(--space-md);
-  background: var(--accent);
+  background: linear-gradient(135deg, var(--accent), var(--accent2));
   color: var(--text-inverse);
   display: inline-flex;
   align-items: center;
@@ -2586,18 +2609,18 @@ input[type="range"]::-moz-range-thumb {
 
 [data-theme="dark"] #landing-hero {
   background:
-    radial-gradient(700px 360px at 18% -5%, rgba(108, 132, 248, 0.18), transparent 58%),
-    radial-gradient(640px 320px at 88% 8%, rgba(45, 212, 191, 0.15), transparent 56%),
+    radial-gradient(700px 360px at 18% -5%, rgba(108, 132, 248, 0.14), transparent 58%),
+    radial-gradient(640px 320px at 88% 8%, rgba(45, 212, 191, 0.12), transparent 56%),
     var(--bg-body);
 }
 
 [data-theme="dark"] .landing-feature-card {
-  background: var(--bg-card);
-  border-color: var(--border-light);
+  background: rgba(15, 23, 42, 0.58);
+  border-color: rgba(148, 163, 184, 0.14);
 }
 
 [data-theme="dark"] .landing-steps-row::before {
-  background: var(--border-medium);
+  background: linear-gradient(90deg, transparent, rgba(108, 132, 248, 0.22), transparent);
 }
 
 [data-theme="dark"] .landing-cta-btn {
