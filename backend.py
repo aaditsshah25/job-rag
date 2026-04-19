@@ -1776,14 +1776,13 @@ Produce 5-8 suggestions ordered by priority (high first). Detect the likely indu
 
     user_prompt = f"Analyze this resume:\n\n{text[:4000]}"
 
-    model = get_gemini()
-    response = model.generate_content(
+    raw = await gemini_generate_async(
         f"{system_prompt}\n\n{user_prompt}",
-        generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=2000),
+        genai.types.GenerationConfig(temperature=0.3, max_output_tokens=2000),
     )
 
     result = _parse_model_json_or_default(
-        response.text,
+        raw,
         {"overall_score": 0, "suggestions": [], "ats_tips": [], "industry_tips": [], "score_breakdown": {}},
         "enhance_resume",
     )
@@ -1853,14 +1852,13 @@ JOB REQUIRED SKILLS: {skills_str}
 CANDIDATE RESUME:
 {req.resume_text[:4000]}"""
 
-    model = get_gemini()
-    response = model.generate_content(
+    raw = await gemini_generate_async(
         f"{system_prompt}\n\n{user_prompt}",
-        generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=2000),
+        genai.types.GenerationConfig(temperature=0.3, max_output_tokens=2000),
     )
 
     result = _parse_model_json_or_default(
-        response.text,
+        raw,
         {
             "tailored_score": 0,
             "score_rationale": "Analysis could not be completed.",
@@ -1917,14 +1915,13 @@ JOB SKILLS: {skills_str}
 RESUME TEXT:
 {req.resume_text[:4000]}"""
 
-    model = get_gemini()
-    response = model.generate_content(
+    raw = await gemini_generate_async(
         f"{system_prompt}\n\n{user_prompt}",
-        generation_config=genai.types.GenerationConfig(temperature=0.1, max_output_tokens=800),
+        genai.types.GenerationConfig(temperature=0.1, max_output_tokens=800),
     )
 
     return _parse_model_json_or_default(
-        response.text,
+        raw,
         {
             "match_percentage": 0,
             "present_keywords": [],
@@ -1996,12 +1993,11 @@ CANDIDATE RESUME TEXT
 """
 
     try:
-        model = get_gemini()
-        response = model.generate_content(
+        raw_email = await gemini_generate_async(
             f"{system_prompt}\n\n{user_prompt}",
-            generation_config=genai.types.GenerationConfig(temperature=0.35, max_output_tokens=2200),
+            genai.types.GenerationConfig(temperature=0.35, max_output_tokens=2200),
         )
-        parsed = _parse_model_json_or_default(response.text, {}, "compose_recruiter_email")
+        parsed = _parse_model_json_or_default(raw_email, {}, "compose_recruiter_email")
         subject = _safe_str(parsed.get("subject", subject)) or subject
         body = _safe_str(parsed.get("body", body)) or body
         tailored_resume_text = _safe_str(parsed.get("tailored_resume_text", tailored_resume_text)) or tailored_resume_text
@@ -2127,36 +2123,17 @@ def _fetch_all_jobs_from_pinecone() -> list[dict]:
 
 
 def _get_browse_jobs() -> list[dict]:
-    """Return cached full job list, refreshing if stale."""
+    """Return cached full job list loaded directly from CSV (all 2000 rows with correct metadata)."""
     now = time.time()
     if _browse_cache["jobs"] and (now - _browse_cache["fetched_at"]) < _BROWSE_CACHE_TTL:
         return _browse_cache["jobs"]
 
-    jobs: list[dict] = []
-    if PINECONE_API_KEY:
-        try:
-            jobs = _fetch_all_jobs_from_pinecone()
-        except Exception as exc:
-            log.warning("browse: Pinecone fetch failed: %s", exc)
-
-    # Fall back to broad semantic searches covering common roles if Pinecone list fails
-    if not jobs:
-        seen: set[str] = set()
-        broad_queries = [
-            "software engineer developer", "data scientist analyst",
-            "product manager designer", "marketing sales operations",
-            "finance accounting hr", "devops cloud infrastructure",
-        ]
-        for bq in broad_queries:
-            for c in search_jobs(bq, top_k=50):
-                key = f"{c.get('title','')}|{c.get('company','')}"
-                if key not in seen:
-                    seen.add(key)
-                    jobs.append(c)
+    df = get_csv_df()
+    jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
 
     _browse_cache["jobs"] = jobs
     _browse_cache["fetched_at"] = now
-    log.info("browse: cache refreshed with %d jobs", len(jobs))
+    log.info("browse: cache loaded %d jobs from CSV", len(jobs))
     return jobs
 
 
