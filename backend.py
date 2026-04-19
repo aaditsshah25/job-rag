@@ -217,12 +217,37 @@ else:
     limiter = _StubLimiter()
 
 # ─── API Key auth ─────────────────────────────────────
+def _decode_bearer_jwt_or_none(authorization: str | None) -> dict | None:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    if not _PYJWT_AVAILABLE:
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        return None
+    try:
+        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except Exception:
+        return None
+    return payload if payload.get("sub") else None
+
+
 async def verify_api_key(request: Request):
+    # Accept either explicit API key or a valid user Bearer token.
+    # This keeps dashboard endpoints usable for signed-in users.
     if not JOBMATCH_API_KEY:
-        return  # no auth configured
+        return  # no API key configured
+
     key = request.headers.get("X-Api-Key", "")
-    if key != JOBMATCH_API_KEY:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    if key == JOBMATCH_API_KEY:
+        return
+
+    authorization = request.headers.get("Authorization")
+    payload = _decode_bearer_jwt_or_none(authorization)
+    if payload:
+        return
+
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 async def require_bearer_jwt(authorization: Optional[str] = Header(default=None)):
@@ -231,17 +256,9 @@ async def require_bearer_jwt(authorization: Optional[str] = Header(default=None)
     if not _PYJWT_AVAILABLE:
         raise HTTPException(status_code=503, detail="PyJWT is not installed on this server")
 
-    token = authorization.split(" ", 1)[1].strip()
-    if not token:
-        raise HTTPException(status_code=401, detail="Missing Bearer token")
-
-    try:
-        payload = pyjwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-    except Exception:
+    payload = _decode_bearer_jwt_or_none(authorization)
+    if not payload:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    if not payload.get("sub"):
-        raise HTTPException(status_code=401, detail="Invalid token payload")
     return payload
 
 
