@@ -4161,30 +4161,46 @@ body::after {
 
 .browse-clear-btn,
 .browse-go-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   white-space: nowrap;
   padding: 9px 20px;
+  font-family: inherit;
   font-size: 0.875rem;
   font-weight: 600;
-  line-height: 1.5;
-  height: auto;
+  line-height: 1;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  width: auto;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+.browse-go-btn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  box-shadow: 0 4px 14px rgba(13, 109, 102, 0.24);
+}
+
+.browse-go-btn:hover {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
 }
 
 .browse-clear-btn {
   background: var(--bg-card);
-  background-image: none;
   color: var(--text-muted);
   border: 1px solid var(--border-light);
   box-shadow: var(--shadow-xs);
-  width: auto;
-  margin-top: 0;
 }
 
 .browse-clear-btn:hover {
   background: var(--bg-section);
   border-color: var(--accent);
   color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-muted);
-  transform: none;
 }
 
 /* ── Results count ── */
