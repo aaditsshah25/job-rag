@@ -4115,7 +4115,7 @@ body::after {
 
 .browse-search-input {
   width: 100%;
-  padding: 9px 12px 9px 36px;
+  padding: 9px 12px;
   border: 1px solid var(--border-light);
   border-radius: 8px;
   font-size: 0.875rem;
