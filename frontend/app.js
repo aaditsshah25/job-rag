@@ -133,6 +133,12 @@ function signOut() {
   setAuthStatus('Signed out. Please sign in with Google to continue.');
 }
 
+function handleAuthFailure(message = 'Your session expired. Please sign in again.') {
+  signOut();
+  setAuthStatus(message);
+  revealAuthGate({ scroll: false });
+}
+
 async function resolveGoogleClientId() {
   if (CONFIG.GOOGLE_CLIENT_ID) return CONFIG.GOOGLE_CLIENT_ID;
   try {
@@ -330,6 +336,11 @@ async function loadUserData() {
     fetch(`${CONFIG.API_BASE_URL}/applications/me`, { headers }),
   ]);
 
+  if (bookmarksRes.status === 401 || applicationsRes.status === 401) {
+    handleAuthFailure('Session expired. Please sign in again to view your saved jobs.');
+    return;
+  }
+
   const bookmarksPayload = bookmarksRes.ok ? await bookmarksRes.json() : { bookmarks: [] };
   const applicationsPayload = applicationsRes.ok ? await applicationsRes.json() : { applications: [] };
 
@@ -436,9 +447,23 @@ function buildResultsEmailMarkdown() {
 }
 
 async function checkEmailServiceStatus() {
+  if (!AUTH.isAuthenticated()) {
+    emailServiceReady = false;
+    emailServiceIssue = 'Sign in to check email service status';
+    if (emailResultsBtn) {
+      emailResultsBtn.disabled = true;
+      emailResultsBtn.title = emailServiceIssue;
+    }
+    return;
+  }
+
   const headers = AUTH.headers();
   try {
     const res = await fetch(CONFIG.API_BASE_URL + '/email/status', { method: 'GET', headers });
+    if (res.status === 401) {
+      handleAuthFailure('Session expired. Please sign in again.');
+      return;
+    }
     if (!res.ok) {
       emailServiceReady = false;
       emailServiceIssue = `Email status check failed (${res.status})`;
@@ -809,6 +834,10 @@ async function handleResumeUpload(file) {
       headers,
       body: formData,
     });
+    if (res.status === 401) {
+      handleAuthFailure('Session expired. Please sign in again before uploading your resume.');
+      throw new Error('Session expired. Please sign in again.');
+    }
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       throw new Error(d.detail || `Server error ${res.status}`);
