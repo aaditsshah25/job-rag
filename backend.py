@@ -1483,12 +1483,11 @@ Formatting requirements:
 - Do NOT include subject line, date, postal address, or placeholders like [Company].
 - Keep it natural and specific, not generic."""
 
-    model = get_gemini()
-    response = model.generate_content(
+    raw = await gemini_generate_async(
         prompt,
-        generation_config=genai.types.GenerationConfig(temperature=0.7, max_output_tokens=600),
+        genai.types.GenerationConfig(temperature=0.7, max_output_tokens=600),
     )
-    return {"cover_letter": response.text.strip()}
+    return {"cover_letter": raw.strip()}
 
 
 @app.post("/bookmark", dependencies=[Depends(verify_api_key)])
