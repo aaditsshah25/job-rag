@@ -184,14 +184,24 @@ _csv_df = None
 
 def get_csv_df():
     global _csv_df
-    if _csv_df is None:
-        if os.path.exists(CSV_PATH):
+    if _csv_df is None or _csv_df.empty:
+        candidate_paths = [
+            CSV_PATH,
+            os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv"),
+            os.path.join(os.path.dirname(__file__), "GENAI_RAG_Dataset - Sheet1.csv"),
+        ]
+        loaded = pd.DataFrame()
+        for path in candidate_paths:
+            if not path or not os.path.exists(path):
+                continue
             try:
-                _csv_df = pd.read_csv(CSV_PATH)
-            except Exception:
-                _csv_df = pd.DataFrame()
-        else:
-            _csv_df = pd.DataFrame()
+                loaded = pd.read_csv(path)
+                if not loaded.empty:
+                    log.info("Loaded CSV fallback dataset from %s (%d rows)", path, len(loaded))
+                    break
+            except Exception as exc:
+                log.warning("Failed to read CSV at %s: %s", path, exc)
+        _csv_df = loaded
     return _csv_df
 
 # ─── Session history (in-memory, 60-min TTL) ──────────
@@ -738,29 +748,43 @@ def _verify_google_credential(credential: str) -> dict:
         raise HTTPException(status_code=401, detail="Invalid Google credential")
 
 def clean_row(row) -> dict:
-    profile = _parse_company_profile(_safe_str(row.get("Company Profile", "")))
-    skills   = _parse_skills(_safe_str(row.get("skills", "")))
-    benefits = _parse_benefits(_safe_str(row.get("Benefits", "")))
+    def _pick(*keys):
+        for key in keys:
+            if key in row and _safe_str(row.get(key, "")):
+                return row.get(key, "")
+        return ""
+
+    profile_blob = _safe_str(_pick("Company Profile", "company_profile"))
+    profile = _parse_company_profile(profile_blob)
+    skills = _parse_skills(_safe_str(_pick("skills", "Skills")))
+    benefits = _parse_benefits(_safe_str(_pick("Benefits", "benefits")))
+
+    sector = _safe_str(_pick("Sector", "sector")) or profile.get("Sector", "")
+    industry = _safe_str(_pick("Industry", "industry")) or profile.get("Industry", "")
+    company_size = _safe_str(_pick("Company Size", "company_size"))
+
     return {
-        "job_id":           _safe_str(row.get("Job Id", "")),
-        "title":            _safe_str(row.get("Job Title", "")),
-        "role":             _safe_str(row.get("Role", "")),
-        "company":          _safe_str(row.get("Company", "")),
-        "location":         _safe_str(row.get("location", "")),
-        "country":          _safe_str(row.get("Country", "")),
-        "work_type":        _safe_str(row.get("Work Type", "")),
-        "company_size":     _safe_str(row.get("Company Size", "")),
-        "experience":       _parse_experience(_safe_str(row.get("Experience", ""))),
-        "qualifications":   _safe_str(row.get("Qualifications", "")),
-        "salary":           _parse_salary(_safe_str(row.get("Salary Range", ""))),
-        "description":      _safe_str(row.get("Job Description", "")),
-        "responsibilities": _safe_str(row.get("Responsibilities", "")),
+        "job_id":           _safe_str(_pick("Job Id", "job_id")),
+        "title":            _safe_str(_pick("Job Title", "title")),
+        "role":             _safe_str(_pick("Role", "role")),
+        "company":          _safe_str(_pick("Company", "company")),
+        "location":         _safe_str(_pick("location", "Location", "city")),
+        "country":          _safe_str(_pick("Country", "country")),
+        "work_type":        _safe_str(_pick("Work Type", "work_type")),
+        "company_size":     company_size,
+        "experience":       _parse_experience(_safe_str(_pick("Experience", "experience"))),
+        "qualifications":   _safe_str(_pick("Qualifications", "qualifications")),
+        "salary":           _parse_salary(_safe_str(_pick("Salary Range", "salary"))),
+        "description":      _safe_str(_pick("Job Description", "description")),
+        "responsibilities": _safe_str(_pick("Responsibilities", "responsibilities")),
         "skills":           skills,
         "benefits":         benefits,
-        "sector":           profile.get("Sector", ""),
-        "industry":         profile.get("Industry", ""),
-        "posting_date":     _safe_str(row.get("Job Posting Date", "")),
-        "portal":           _safe_str(row.get("Job Portal", "")),
+        "sector":           sector,
+        "industry":         industry,
+        "posting_date":     _safe_str(_pick("Job Posting Date", "posting_date")),
+        "portal":           _safe_str(_pick("Job Portal", "portal")),
+        "source":           _safe_str(_pick("source", "Source")) or "local_csv",
+        "external_url":     _safe_str(_pick("external_url", "External URL")),
     }
 
 def job_to_text(job: dict) -> str:
@@ -994,6 +1018,8 @@ def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
             job.get("location", ""),
             job.get("country", ""),
             job.get("description", ""),
+            job.get("qualifications", ""),
+            job.get("responsibilities", ""),
             " ".join(job.get("skills", [])[:20]),
             job.get("industry", ""),
             job.get("sector", ""),
@@ -1005,8 +1031,72 @@ def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
         if score > 0:
             scored.append({"score": round(float(score), 4), **job, "source": "local_csv_fallback"})
 
+    if not scored:
+        # Ensure graceful degradation: if query tokens are too specific, still return broad options.
+        fallback = []
+        limit = max(1, top_k)
+        for i in range(min(len(df), limit)):
+            job = clean_row(df.iloc[i])
+            fallback.append({"score": 0.01, **job, "source": "local_csv_fallback_broad"})
+        return fallback
+
     scored.sort(key=lambda x: x.get("score", 0), reverse=True)
     return scored[: max(1, top_k)]
+
+
+def _extract_resume_basics(text: str) -> dict:
+    lower_text = (text or "").lower()
+    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+
+    known_skills = [
+        "python", "sql", "excel", "power bi", "tableau", "java", "javascript", "react",
+        "node", "machine learning", "deep learning", "nlp", "fastapi", "django", "aws", "azure",
+        "docker", "kubernetes", "pandas", "numpy", "git", "linux", "spark", "tensorflow", "pytorch",
+    ]
+    extracted_skills = [s for s in known_skills if s in lower_text]
+
+    for line in lines[:40]:
+        if re.search(r"\b(technical\s+skills|skills|tech\s*stack|tools?)\b\s*[:\-]", line, flags=re.IGNORECASE):
+            rhs = re.split(r"[:\-]", line, maxsplit=1)[-1]
+            for part in re.split(r"[,|;/•]", rhs):
+                token = _safe_str(part)
+                if 2 <= len(token) <= 40 and re.search(r"[A-Za-z]", token):
+                    extracted_skills.append(token)
+
+    unique_skills = []
+    seen = set()
+    for skill in extracted_skills:
+        s = _safe_str(skill)
+        if not s:
+            continue
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_skills.append(s)
+
+    found_email = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text or "")
+
+    possible_name = ""
+    for ln in lines[:6]:
+        if "@" in ln or len(ln) > 80:
+            continue
+        if re.search(r"[A-Za-z]", ln):
+            possible_name = ln
+            break
+
+    years = re.findall(r"(\d+)\+?\s*(?:years?|yrs?)", lower_text)
+    experience_years = int(years[0]) if years else 0
+
+    return {
+        "name": possible_name,
+        "skills": unique_skills[:25],
+        "experience_years": experience_years,
+        "education": "",
+        "recent_role": "",
+        "industries": [],
+        "email": found_email.group(0) if found_email else "",
+    }
 
 
 def _parse_pinecone_blob_text(blob_text: str) -> dict:
@@ -1113,6 +1203,10 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
         if salary_min > 0 and not results.matches:
             log.info("Salary-filtered query returned 0 matches; retrying without salary filter")
             results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
+
+        if not results.matches:
+            log.info("Vector retrieval returned 0 matches; using local CSV fallback search")
+            return _search_jobs_local_csv(query, top_k=top_k)
 
         return [_normalize_pinecone_match(m) for m in results.matches]
     except Exception as exc:
@@ -1443,26 +1537,11 @@ async def parse_resume(file: UploadFile = File(...)):
     if not text.strip():
         raise HTTPException(status_code=422, detail="No text could be extracted from PDF")
 
+    basic = _extract_resume_basics(text)
+
     if not GOOGLE_API_KEY:
-        found_email = re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
-        known_skills = [
-            "python", "sql", "excel", "power bi", "tableau", "java", "javascript", "react",
-            "node", "machine learning", "deep learning", "nlp", "fastapi", "django", "aws", "azure",
-        ]
-        lower_text = text.lower()
-        extracted_skills = [s for s in known_skills if s in lower_text]
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        possible_name = lines[0][:80] if lines else ""
-        years = re.findall(r"(\d+)\+?\s*(?:years?|yrs?)", lower_text)
-        experience_years = int(years[0]) if years else 0
         return {
-            "name": possible_name,
-            "skills": extracted_skills,
-            "experience_years": experience_years,
-            "education": "",
-            "recent_role": "",
-            "industries": [],
-            "email": found_email.group(0) if found_email else "",
+            **basic,
             "raw_text": text[:4000],
             "resume_text": text[:4000],
             "mode": "basic",
@@ -1491,8 +1570,46 @@ Resume text:
         raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
 
     parsed = _parse_model_json_or_default(raw, {}, "parse_resume")
+    if not isinstance(parsed, dict):
+        parsed = {}
+
+    if not isinstance(parsed.get("skills"), list):
+        parsed["skills"] = _parse_skills(_safe_str(parsed.get("skills", "")))
+    if not isinstance(parsed.get("industries"), list):
+        parsed["industries"] = _parse_skills(_safe_str(parsed.get("industries", "")))
+
+    if not parsed.get("experience_years") and parsed.get("experience"):
+        try:
+            parsed["experience_years"] = int(parsed.get("experience"))
+        except Exception:
+            parsed["experience_years"] = 0
+
+    for key in ("name", "education", "recent_role", "email"):
+        if not _safe_str(parsed.get(key, "")) and _safe_str(basic.get(key, "")):
+            parsed[key] = basic[key]
+
+    if not parsed.get("experience_years") and basic.get("experience_years"):
+        parsed["experience_years"] = basic.get("experience_years", 0)
+
+    merged_skills = []
+    seen_skills = set()
+    for skill in (parsed.get("skills") or []) + (basic.get("skills") or []):
+        s = _safe_str(skill)
+        if not s:
+            continue
+        k = s.lower()
+        if k in seen_skills:
+            continue
+        seen_skills.add(k)
+        merged_skills.append(s)
+    parsed["skills"] = merged_skills[:25]
+
+    if not parsed.get("industries"):
+        parsed["industries"] = basic.get("industries", [])
+
     parsed["raw_text"] = text[:4000]
     parsed["resume_text"] = parsed["raw_text"]
+    parsed["mode"] = "llm+basic"
     return parsed
 
 
