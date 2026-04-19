@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
     rel="stylesheet" />
-  <link rel="stylesheet" href="style.css?v=5" />
+  <link rel="stylesheet" href="style.css?v=6" />
   <style>
     .required-star {
       color: #ef4444;
@@ -144,6 +144,10 @@
       </div>
       <div class="header-actions">
         <p class="tagline">RAG-Powered Job Recommendations</p>
+        <button id="browseJobsBtn" class="btn-secondary myapps-nav-btn" type="button">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          Browse Jobs
+        </button>
         <button id="myApplicationsBtn" class="btn-secondary myapps-nav-btn" type="button">
           My Applications
           <span id="applicationsBadge" class="myapps-nav-badge hidden">0</span>
@@ -326,6 +330,54 @@
 
     </section>
 
+    <!-- ─── BROWSE JOBS PANEL ─── -->
+    <section id="browseJobsPanel" class="hidden">
+      <div class="browse-shell">
+        <div class="browse-header">
+          <div>
+            <h2>Browse Jobs</h2>
+            <p class="browse-subtitle">Explore all available positions &mdash; no resume needed</p>
+          </div>
+          <button id="backFromBrowseBtn" class="btn-secondary" type="button">Back to Search</button>
+        </div>
+
+        <!-- Search & Filters -->
+        <div class="browse-filters-bar">
+          <div class="browse-search-wrap">
+            <svg class="browse-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="browseSearchInput" class="browse-search-input" type="text" placeholder="Search by role, skill, or keyword…" autocomplete="off" />
+          </div>
+          <select id="browseWorkTypeFilter" class="browse-filter-select">
+            <option value="">All Types</option>
+            <option value="Remote">Remote</option>
+            <option value="Hybrid">Hybrid</option>
+            <option value="On-site">On-site</option>
+          </select>
+          <input id="browseLocationFilter" class="browse-filter-input" type="text" placeholder="Location…" autocomplete="off" />
+          <button id="browseSearchBtn" class="btn-primary browse-go-btn" type="button">Search</button>
+        </div>
+
+        <!-- Job Grid -->
+        <div id="browseJobsState" class="state-card">
+          <div class="state-icon">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+          </div>
+          <h3>Ready to explore</h3>
+          <p>Click <strong>Search</strong> or type a keyword to load listings.</p>
+        </div>
+        <div id="browseJobsLoading" class="state-card hidden">
+          <div class="loader"><div class="loader-ring"></div></div>
+          <h3>Loading jobs…</h3>
+        </div>
+        <div id="browseJobsGrid" class="browse-grid hidden"></div>
+        <div id="browsePagination" class="browse-pagination hidden">
+          <button id="browsePrevBtn" class="btn-secondary" type="button" disabled>← Prev</button>
+          <span id="browsePageInfo" class="browse-page-info"></span>
+          <button id="browseNextBtn" class="btn-secondary" type="button">Next →</button>
+        </div>
+      </div>
+    </section>
+
     <section id="myApplicationsPanel" class="hidden">
       <div class="myapps-shell">
         <div class="myapps-header">
@@ -450,7 +502,7 @@
   <script src="config.js?v=3"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="data.js?v=3"></script>
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 
   <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 </body>

@@ -1,6 +1,6 @@
 """
 JobMatch AI — Python Backend v2.0.0
-RAG pipeline: CSV → Pinecone (embeddings) → Gemma (ranking & response)
+RAG pipeline: CSV → Pinecone (embeddings) → Gemma 4 (ranking & response)
 
 Endpoints:
   POST /webhook          — accepts {profile, sessionId} or {chatInput, sessionId}
@@ -94,7 +94,7 @@ PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
 EMBED_MODEL       = "text-embedding-3-small"
-CHAT_MODEL        = os.getenv("GEMMA_CHAT_MODEL", "gemma-3-27b-it")
+CHAT_MODEL        = os.getenv("GEMMA_CHAT_MODEL", "gemma-4-31b-it")
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
@@ -449,35 +449,26 @@ class RecruiterEmailComposeRequest(BaseModel):
 
 # ─── Profile query builder ────────────────────────────
 def build_query_from_profile(profile: UserProfile) -> str:
-    parts = ["I'm looking for job recommendations. Here is my profile:"]
-    if profile.name:
-        parts.append(f"Name: {profile.name}")
+    parts = []
     if profile.desiredRole:
-        parts.append(f"Desired Role: {profile.desiredRole}")
-    if profile.experience:
-        parts.append(f"Years of Experience: {profile.experience}")
+        parts.append(f"Role: {profile.desiredRole}")
     if profile.skills:
-        parts.append(f"Key Skills: {', '.join(profile.skills)}")
+        parts.append(f"Skills: {', '.join(profile.skills[:12])}")
+    if profile.experience:
+        parts.append(f"Experience: {profile.experience} years")
     if profile.education:
         parts.append(f"Education: {profile.education}")
     if profile.industry:
-        parts.append(f"Preferred Industry: {profile.industry}")
+        parts.append(f"Industry: {profile.industry}")
     if profile.location:
-        parts.append(f"Preferred Location: {profile.location}")
+        parts.append(f"Location: {profile.location}")
     if profile.workType and profile.workType != "Any":
-        parts.append(f"Work Type Preference: {profile.workType}")
+        parts.append(f"Work Type: {profile.workType}")
     if profile.salaryMin:
-        parts.append(f"Minimum Salary: ${profile.salaryMin:,} per year")
-    if profile.companySize and profile.companySize != "Any":
-        parts.append(f"Company Size Preference: {profile.companySize}")
-    if profile.benefits:
-        parts.append(f"Benefits Priorities: {', '.join(profile.benefits)}")
-    if profile.workAuth and profile.workAuth != "Not Specified":
-        parts.append(f"Work Authorization Status: {profile.workAuth}")
+        parts.append(f"Salary Minimum: ${profile.salaryMin:,} per year")
     if profile.additional:
-        parts.append(f"Additional Preferences:\n{profile.additional}")
-    parts.append("Please find the best matching jobs for my profile from the available postings.")
-    return "\n".join(parts)
+        parts.append(f"Preferences: {profile.additional}")
+    return " | ".join(parts) if parts else "job recommendations"
 
 # ─── Data cleaning utilities ──────────────────────────
 def _safe_str(val) -> str:
@@ -625,11 +616,19 @@ def _markdown_to_email_html(markdown: str) -> str:
     return "\n".join(out)
 
 
+def _strip_model_json(raw: str) -> str:
+    """Strip markdown code fences that Gemma/Gemini often wraps around JSON."""
+    raw = raw.strip()
+    # Remove ```json ... ``` or ``` ... ``` blocks
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*```$", "", raw)
+    return raw.strip()
+
 def _parse_model_json_or_default(raw: str, default, context: str):
     try:
-        return json.loads(raw)
+        return json.loads(_strip_model_json(raw))
     except Exception as exc:
-        log.warning("Invalid model JSON in %s: %s", context, exc)
+        log.warning("Invalid model JSON in %s: %s | raw snippet: %.200s", context, exc, raw)
         return default
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -869,10 +868,28 @@ def index_dataset(force: bool = False) -> int:
     return total
 
 def _extract_salary_min(salary_str: str) -> float:
-    m = re.search(r"\$([\d,]+)", salary_str)
-    if m:
-        return float(m.group(1).replace(",", ""))
-    return 0.0
+    raw = _safe_str(salary_str)
+    if not raw:
+        return 0.0
+
+    normalized = raw.lower().replace(",", "")
+    # Handle India notation like "12 LPA" (~12 lakh per annum).
+    lpa_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:lpa|lakh)", normalized)
+    if lpa_match:
+        return float(lpa_match.group(1)) * 100000.0
+
+    # Capture first numeric amount and an optional K/M suffix.
+    money_match = re.search(r"\$?\s*(\d+(?:\.\d+)?)\s*([kKmM]?)", normalized)
+    if not money_match:
+        return 0.0
+
+    amount = float(money_match.group(1))
+    unit = money_match.group(2).lower()
+    if unit == "k":
+        amount *= 1000.0
+    elif unit == "m":
+        amount *= 1000000.0
+    return amount
 
 def _parse_salary_min_from_query(query: str) -> float:
     m = re.search(r"\$\s*([\d,]+)\s*[Kk]", query)
@@ -893,6 +910,10 @@ def _tokenize_query(query: str) -> list[str]:
     stop = {
         "the", "and", "for", "with", "from", "that", "this", "your", "have", "into",
         "jobs", "job", "role", "show", "find", "need", "want", "looking", "work", "remote",
+        "name", "desired", "desiredrole", "skills", "skill", "experience", "years", "year",
+        "education", "industry", "location", "preferred", "preference", "preferences",
+        "company", "size", "benefits", "authorization", "status", "additional", "minimum",
+        "salary", "profile", "recommendations", "available", "postings", "please",
     }
     return [t for t in tokens if t not in stop]
 
@@ -1025,7 +1046,19 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
         if salary_min > 0:
             pinecone_filter = {"salary_min": {"$gte": salary_min}}
         results = index.query(vector=query_emb, top_k=top_k, include_metadata=True, filter=pinecone_filter)
-        return [_normalize_pinecone_match(m) for m in results.matches]
+
+        # Salary metadata can be missing/inconsistent (especially for live feeds).
+        # If a strict salary filter wipes out retrieval, retry without the filter.
+        if salary_min > 0 and not results.matches:
+            log.info("Salary-filtered query returned 0 matches; retrying without salary filter")
+            results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
+
+        matches = [_normalize_pinecone_match(m) for m in results.matches]
+        if matches:
+            return matches
+
+        log.info("Vector search returned 0 matches; falling back to local CSV search")
+        return _search_jobs_local_csv(query, top_k)
     except Exception as exc:
         log.warning("Vector search failed, falling back to local CSV search: %s", exc)
         return _search_jobs_local_csv(query, top_k)
@@ -1041,7 +1074,7 @@ def search_jobs_cached(query: str, top_k: int = TOP_K, profile_salary_min: Optio
 # ─── LLM Prompt & Response ────────────────────────────
 SYSTEM_PROMPT = """You are JobMatch AI, a precise and expert career advisor.
 
-You will receive a user's job-seeking profile and a list of candidate job postings retrieved via semantic search. Your job is to act as a senior recruiter: critically evaluate each candidate posting against the user's profile and select the best {top_n} matches.
+You will receive a user's job-seeking profile and a list of candidate job postings retrieved via semantic search. Act as a senior recruiter: critically evaluate each candidate posting against the user's profile and select the best {top_n} matches.
 
 SCORING CRITERIA (be strict and realistic):
 - 9-10: Near-perfect fit — role, skills, experience, location, and salary all align closely
@@ -1050,7 +1083,9 @@ SCORING CRITERIA (be strict and realistic):
 - 3-4: Weak fit — only surface-level match
 - Do NOT inflate scores. A score of 9+ should be rare and well-justified.
 
-OUTPUT FORMAT — follow this EXACTLY, no deviations:
+YOUR RESPONSE MUST START IMMEDIATELY WITH THE LINE "# Your Job Match Results" — NO preamble, NO introduction, NO thinking out loud.
+
+OUTPUT FORMAT — copy this structure EXACTLY:
 
 # Your Job Match Results
 
@@ -1082,19 +1117,20 @@ OUTPUT FORMAT — follow this EXACTLY, no deviations:
 ---
 
 ### <next job title> @ <company>
-... (repeat for all {top_n} jobs)
+(repeat the exact block above for all {top_n} jobs)
 
-## Recommended Next Steps
+## Overall Recommended Next Steps
 1. <Broad career advice>
 2. <Skill to develop>
 3. <Networking tip>
 
 STRICT RULES:
-- Use ONLY the job data provided
+- Use ONLY the job data provided — do NOT invent details
 - Be specific: mention actual skill names, job titles, and requirements from the data
 - Do NOT use emojis
-- Do NOT wrap output in code fences
-- Do NOT add any text before "# Your Job Match Results"
+- Do NOT wrap output in markdown code fences
+- Do NOT add any commentary before "# Your Job Match Results"
+- Output plain markdown only — no XML tags, no JSON
 """.strip()
 
 def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
@@ -1168,9 +1204,15 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
     chat = model.start_chat(history=chat_history)
     response = chat.send_message(
         full_prompt,
-        generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=3000),
+        generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=4096),
     )
-    return response.text.strip()
+    text = response.text.strip()
+    # Strip any preamble before the expected heading (Gemma sometimes adds intro text)
+    marker = "# Your Job Match Results"
+    idx = text.find(marker)
+    if idx > 0:
+        text = text[idx:]
+    return text
 
 # ─── Endpoints ────────────────────────────────────────
 
@@ -1233,7 +1275,8 @@ async def debug_retrieval(request: Request, req: DebugRetrievalRequest):
         raise HTTPException(status_code=400, detail="Either profile or chatInput is required")
 
     top_k = max(1, min(int(req.topK or 12), 50))
-    candidates = search_jobs_cached(query, top_k=top_k)
+    profile_salary_min = req.profile.salaryMin if req.profile else None
+    candidates = search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min)
     compact = []
     for c in candidates:
         compact.append({
@@ -1348,7 +1391,7 @@ async def parse_resume(file: UploadFile = File(...)):
             "mode": "basic",
         }
 
-    prompt = f"""Extract structured profile information from this resume text. Return ONLY valid JSON with these exact fields:
+    prompt = f"""Extract structured profile information from this resume text. Return ONLY valid JSON — no markdown fences, no explanation, no extra text. Use these exact fields:
 {{
   "name": "full name or empty string",
   "skills": ["skill1", "skill2"],
@@ -1679,7 +1722,7 @@ async def enhance_resume(request: Request, file: UploadFile = File(...)):
 
 Given resume text, produce a JSON audit report. Be specific — quote actual phrases from the resume. Do NOT rewrite the entire resume; produce targeted, actionable micro-improvements only.
 
-Return ONLY valid JSON in this exact schema:
+Return ONLY valid JSON in this exact schema — no markdown code fences, no explanation, no extra text before or after the JSON:
 {
   "overall_score": <integer 0-100>,
   "score_breakdown": {
@@ -1745,7 +1788,7 @@ async def tailor_resume(req: TailorResumeRequest):
 
 Be specific. Quote actual sentences from the resume when suggesting rewrites. Map skills in the JD directly to evidence in the resume. The score must reflect honest gap analysis.
 
-Return ONLY valid JSON in this exact schema:
+Return ONLY valid JSON in this exact schema — no markdown code fences, no explanation, no extra text before or after the JSON:
 {
   "tailored_score": <integer 0-100>,
   "score_rationale": "<2-sentence explanation of the score>",
@@ -1825,7 +1868,7 @@ CANDIDATE RESUME:
 
 @app.post("/keyword-gap", dependencies=[Depends(verify_api_key)])
 async def keyword_gap(req: KeywordGapRequest):
-    system_prompt = """You are a resume keyword analysis system. Given resume text and a job description, extract and categorize keywords. Return ONLY valid JSON.
+    system_prompt = """You are a resume keyword analysis system. Given resume text and a job description, extract and categorize keywords. Return ONLY valid JSON — no markdown code fences, no explanation, no extra text.
 
 {
   "match_percentage": <0-100>,
@@ -1889,7 +1932,7 @@ async def compose_recruiter_email(req: RecruiterEmailComposeRequest):
     tailored_resume_text = (req.resume_text or "").strip()
 
     system_prompt = """You are an expert recruiting communications assistant.
-Return ONLY valid JSON with this exact schema:
+Return ONLY valid JSON with this exact schema — no markdown code fences, no explanation, no extra text before or after the JSON:
 {
   "subject": "<email subject line>",
   "body": "<plain-text outreach email body with a greeting and clear call-to-action>",
@@ -1932,7 +1975,7 @@ CANDIDATE RESUME TEXT
             f"{system_prompt}\n\n{user_prompt}",
             generation_config=genai.types.GenerationConfig(temperature=0.35, max_output_tokens=2200),
         )
-        parsed = json.loads(response.text)
+        parsed = _parse_model_json_or_default(response.text, {}, "compose_recruiter_email")
         subject = _safe_str(parsed.get("subject", subject)) or subject
         body = _safe_str(parsed.get("body", body)) or body
         tailored_resume_text = _safe_str(parsed.get("tailored_resume_text", tailored_resume_text)) or tailored_resume_text
@@ -1993,6 +2036,64 @@ async def get_resume_tailoring(session_id: str, page: int = 0):
         item["analysis"] = _safe_json_loads(item.get("analysis_json", "{}") or "{}", {})
         result.append(item)
     return {"tailoring": result, "page": page}
+
+
+@app.get("/jobs/browse", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
+async def browse_jobs(
+    request: Request,
+    q: str = "",
+    work_type: str = "",
+    location: str = "",
+    page: int = 0,
+    page_size: int = 20,
+):
+    """Return a paginated list of jobs from the index without requiring a user profile."""
+    query = q.strip() if q.strip() else "software engineer developer analyst"
+    top_k = min(100, max(page_size, 50))
+    candidates = search_jobs_cached(query, top_k=top_k)
+
+    # Apply optional filters
+    if work_type:
+        wt_lower = work_type.lower()
+        candidates = [c for c in candidates if wt_lower in (c.get("work_type") or "").lower()]
+    if location:
+        loc_lower = location.lower()
+        candidates = [
+            c for c in candidates
+            if loc_lower in (c.get("location") or "").lower()
+            or loc_lower in (c.get("country") or "").lower()
+        ]
+
+    total = len(candidates)
+    start = page * page_size
+    page_jobs = candidates[start: start + page_size]
+
+    results = []
+    for job in page_jobs:
+        results.append({
+            "title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "location": job.get("location", ""),
+            "country": job.get("country", ""),
+            "work_type": job.get("work_type", ""),
+            "salary": job.get("salary", ""),
+            "experience": job.get("experience", ""),
+            "skills": job.get("skills", [])[:10],
+            "description": (job.get("description") or "")[:300],
+            "industry": job.get("industry", ""),
+            "source": job.get("source", ""),
+            "external_url": job.get("external_url", ""),
+            "score": job.get("score", 0),
+        })
+
+    return {
+        "jobs": results,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (start + page_size) < total,
+    }
 
 
 # ── Serve frontend/ at / and /dashboard ───────────────────────────────────

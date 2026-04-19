@@ -2390,3 +2390,258 @@ myApplicationsBtn?.addEventListener('click', async () => {
 
 backToSearchBtn?.addEventListener('click', closeMyApplicationsView);
 findJobsBtn?.addEventListener('click', closeMyApplicationsView);
+
+// ─── BROWSE JOBS VIEW ────────────────────────────────
+const browseJobsPanel = document.getElementById('browseJobsPanel');
+const browseJobsBtn   = document.getElementById('browseJobsBtn');
+const backFromBrowseBtn = document.getElementById('backFromBrowseBtn');
+
+let browseState = { page: 0, q: '', workType: '', location: '', loading: false };
+
+function openBrowseJobsView() {
+  if (!appMain || !browseJobsPanel || !profilePanel || !resultsPanel) return;
+  myApplicationsPanel?.classList.add('hidden');
+  appMain.classList.add('myapps-open'); // reuse full-width layout class
+  profilePanel.classList.add('hidden');
+  resultsPanel.classList.add('hidden');
+  browseJobsPanel.classList.remove('hidden');
+}
+
+function closeBrowseJobsView() {
+  if (!appMain || !browseJobsPanel || !profilePanel || !resultsPanel) return;
+  appMain.classList.remove('myapps-open');
+  browseJobsPanel.classList.add('hidden');
+  profilePanel.classList.remove('hidden');
+  resultsPanel.classList.remove('hidden');
+}
+
+function workTypeChipClass(wt) {
+  const v = (wt || '').toLowerCase();
+  if (v.includes('remote')) return 'bjc-chip bjc-chip-worktype bjc-chip-remote';
+  if (v.includes('hybrid')) return 'bjc-chip bjc-chip-worktype bjc-chip-hybrid';
+  if (v.includes('on-site') || v.includes('onsite')) return 'bjc-chip bjc-chip-worktype bjc-chip-onsite';
+  return 'bjc-chip bjc-chip-worktype bjc-chip-other';
+}
+
+function renderBrowseJobCard(job, idx) {
+  const isBookmarked = AppState.isBookmarked(job.title, job.company);
+  const skills = Array.isArray(job.skills) ? job.skills.slice(0, 6) : [];
+  const locationDisplay = [job.location, job.country].filter(Boolean).join(', ');
+  const delay = (idx % 20) * 0.04;
+
+  let html = `<article class="browse-job-card" style="animation-delay:${delay}s">`;
+
+  // Top: title + company + bookmark
+  html += `<div class="bjc-top">
+    <div class="bjc-title-block">
+      <h3 class="bjc-title" title="${esc(job.title)}">${esc(job.title)}</h3>
+      ${job.company ? `<div class="bjc-company">${esc(job.company)}</div>` : ''}
+    </div>
+    <button class="bjc-bookmark-btn ${isBookmarked ? 'bookmarked' : ''}"
+      data-bjc-bookmark
+      data-title="${esc(job.title)}"
+      data-company="${esc(job.company)}"
+      data-location="${esc(locationDisplay)}"
+      data-salary="${esc(job.salary || '')}"
+      data-description="${esc((job.description || '').slice(0, 300))}"
+      title="${isBookmarked ? 'Remove bookmark' : 'Bookmark this job'}">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="${isBookmarked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
+    </button>
+  </div>`;
+
+  // Meta chips
+  html += `<div class="bjc-meta">`;
+  if (locationDisplay) html += `<span class="bjc-chip bjc-chip-location"><svg width="11" height="11" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>${esc(locationDisplay)}</span>`;
+  if (job.work_type) html += `<span class="${workTypeChipClass(job.work_type)}">${esc(job.work_type)}</span>`;
+  if (job.salary) html += `<span class="bjc-chip bjc-chip-salary">💰 ${esc(job.salary)}</span>`;
+  html += `</div>`;
+
+  // Description snippet
+  if (job.description) {
+    html += `<p class="bjc-desc">${esc(job.description)}</p>`;
+  }
+
+  // Skills
+  if (skills.length > 0) {
+    html += `<div class="bjc-skills">` + skills.map(s => `<span class="bjc-skill-tag">${esc(s)}</span>`).join('') + `</div>`;
+  }
+
+  // Actions
+  html += `<div class="bjc-actions">`;
+  if (job.external_url) {
+    html += `<a class="bjc-apply-btn" href="${esc(job.external_url)}" target="_blank" rel="noopener noreferrer">
+      Apply
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </a>`;
+  }
+  if (job.source && job.source !== 'pinecone' && job.source !== 'local_csv') {
+    html += `<span class="bjc-source-badge">${esc(job.source)}</span>`;
+  }
+  html += `</div>`;
+
+  html += `</article>`;
+  return html;
+}
+
+async function fetchAndRenderBrowseJobs() {
+  if (browseState.loading) return;
+  browseState.loading = true;
+
+  const stateEl   = document.getElementById('browseJobsState');
+  const loadingEl = document.getElementById('browseJobsLoading');
+  const gridEl    = document.getElementById('browseJobsGrid');
+  const paginEl   = document.getElementById('browsePagination');
+  const pageInfo  = document.getElementById('browsePageInfo');
+  const prevBtn   = document.getElementById('browsePrevBtn');
+  const nextBtn   = document.getElementById('browseNextBtn');
+
+  stateEl?.classList.add('hidden');
+  gridEl?.classList.add('hidden');
+  paginEl?.classList.add('hidden');
+  loadingEl?.classList.remove('hidden');
+
+  const params = new URLSearchParams({
+    page: browseState.page,
+    page_size: 18,
+  });
+  if (browseState.q) params.set('q', browseState.q);
+  if (browseState.workType) params.set('work_type', browseState.workType);
+  if (browseState.location) params.set('location', browseState.location);
+
+  try {
+    const token = AUTH.getToken();
+    const getHeaders = {};
+    if (token) getHeaders['Authorization'] = `Bearer ${token}`;
+    if (CONFIG.API_KEY) getHeaders['X-Api-Key'] = CONFIG.API_KEY;
+    const res = await fetch(`${CONFIG.API_BASE_URL}/jobs/browse?${params}`, {
+      headers: getHeaders,
+    });
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    const data = await res.json();
+
+    loadingEl?.classList.add('hidden');
+
+    if (!data.jobs || data.jobs.length === 0) {
+      if (stateEl) {
+        stateEl.innerHTML = `<div class="state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div><h3>No results found</h3><p>Try a different keyword or clear the filters.</p>`;
+        stateEl.classList.remove('hidden');
+      }
+    } else {
+      if (gridEl) {
+        gridEl.innerHTML = data.jobs.map((job, i) => renderBrowseJobCard(job, i)).join('');
+        gridEl.classList.remove('hidden');
+      }
+
+      // Pagination
+      const totalPages = Math.ceil(data.total / 18);
+      const currentPage = data.page + 1;
+      if (paginEl && pageInfo && prevBtn && nextBtn) {
+        pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+        prevBtn.disabled = browseState.page === 0;
+        nextBtn.disabled = !data.has_more;
+        paginEl.classList.remove('hidden');
+      }
+    }
+  } catch (err) {
+    loadingEl?.classList.add('hidden');
+    if (stateEl) {
+      stateEl.innerHTML = `<div class="state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><h3>Failed to load jobs</h3><p>${esc(err.message)}</p>`;
+      stateEl.classList.remove('hidden');
+    }
+  } finally {
+    browseState.loading = false;
+  }
+}
+
+// Wire up browse panel events
+browseJobsBtn?.addEventListener('click', () => {
+  openBrowseJobsView();
+  // Auto-load on first open
+  if (!document.getElementById('browseJobsGrid')?.innerHTML) {
+    fetchAndRenderBrowseJobs();
+  }
+});
+
+backFromBrowseBtn?.addEventListener('click', closeBrowseJobsView);
+
+document.getElementById('browseSearchBtn')?.addEventListener('click', () => {
+  browseState.q        = document.getElementById('browseSearchInput')?.value.trim() || '';
+  browseState.workType = document.getElementById('browseWorkTypeFilter')?.value || '';
+  browseState.location = document.getElementById('browseLocationFilter')?.value.trim() || '';
+  browseState.page     = 0;
+  fetchAndRenderBrowseJobs();
+});
+
+document.getElementById('browseSearchInput')?.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('browseSearchBtn')?.click();
+});
+
+document.getElementById('browsePrevBtn')?.addEventListener('click', () => {
+  if (browseState.page > 0) { browseState.page--; fetchAndRenderBrowseJobs(); }
+});
+
+document.getElementById('browseNextBtn')?.addEventListener('click', () => {
+  browseState.page++;
+  fetchAndRenderBrowseJobs();
+});
+
+// Bookmark delegation inside browse grid
+document.getElementById('browseJobsGrid')?.addEventListener('click', async (e) => {
+  const btn = e.target.closest('[data-bjc-bookmark]');
+  if (!btn) return;
+
+  const title       = btn.dataset.title || '';
+  const company     = btn.dataset.company || '';
+  const location    = btn.dataset.location || '';
+  const salary      = btn.dataset.salary || '';
+  const description = btn.dataset.description || '';
+
+  const isBookmarked = AppState.isBookmarked(title, company);
+
+  if (isBookmarked) {
+    const existing = AppState.bookmarks.find(b => b.job_title === title && b.company === company);
+    if (existing?.bookmark_id) {
+      try {
+        await fetch(`${CONFIG.API_BASE_URL}/bookmarks/${existing.bookmark_id}`, {
+          method: 'DELETE',
+          headers: authHeaders(),
+        });
+        AppState.bookmarks = AppState.bookmarks.filter(b => b.bookmark_id !== existing.bookmark_id);
+        showToast('Bookmark removed');
+      } catch { showToast('Failed to remove bookmark'); }
+    }
+  } else {
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/bookmark`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          job_title: title,
+          company,
+          location,
+          salary,
+          score: 0,
+          description,
+        }),
+      });
+      const data = await res.json();
+      AppState.bookmarks.push({
+        bookmark_id: data.bookmark_id,
+        job_title: title,
+        company,
+        location,
+        salary,
+        score: 0,
+      });
+      showToast('Job bookmarked!');
+    } catch { showToast('Failed to bookmark job'); }
+  }
+
+  // Update button icon without re-fetching
+  const nowBookmarked = AppState.isBookmarked(title, company);
+  const svg = btn.querySelector('svg');
+  if (svg) svg.setAttribute('fill', nowBookmarked ? 'currentColor' : 'none');
+  btn.classList.toggle('bookmarked', nowBookmarked);
+  btn.title = nowBookmarked ? 'Remove bookmark' : 'Bookmark this job';
+});
