@@ -310,13 +310,12 @@ function normalizeStatus(status) {
 }
 
 async function loadUserData() {
-  const sid = localStorage.getItem(SESSION_ID_KEY);
-  if (!sid) return;
+  if (!AUTH.isAuthenticated()) return;
   const headers = authHeaders();
 
   const [bookmarksRes, applicationsRes] = await Promise.all([
-    fetch(`${CONFIG.API_BASE_URL}/bookmarks/${encodeURIComponent(sid)}`, { headers }),
-    fetch(`${CONFIG.API_BASE_URL}/applications/${encodeURIComponent(sid)}`, { headers }),
+    fetch(`${CONFIG.API_BASE_URL}/bookmarks/me`, { headers }),
+    fetch(`${CONFIG.API_BASE_URL}/applications/me`, { headers }),
   ]);
 
   const bookmarksPayload = bookmarksRes.ok ? await bookmarksRes.json() : { bookmarks: [] };

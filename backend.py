@@ -244,6 +244,24 @@ async def require_bearer_jwt(authorization: Optional[str] = Header(default=None)
         raise HTTPException(status_code=401, detail="Invalid token payload")
     return payload
 
+
+def _user_email_from_payload(payload: dict) -> str:
+    return _safe_str(payload.get("sub", "")).lower()
+
+
+async def _ensure_table_columns():
+    async with aiosqlite.connect(DB_PATH) as db:
+        async def has_column(table: str, column: str) -> bool:
+            async with db.execute(f"PRAGMA table_info({table})") as cursor:
+                rows = await cursor.fetchall()
+            return any(row[1] == column for row in rows)
+
+        if not await has_column("bookmarks", "user_email"):
+            await db.execute("ALTER TABLE bookmarks ADD COLUMN user_email TEXT")
+        if not await has_column("applications", "user_email"):
+            await db.execute("ALTER TABLE applications ADD COLUMN user_email TEXT")
+        await db.commit()
+
 # ─── Database init ────────────────────────────────────
 async def init_db():
     os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
@@ -317,6 +335,7 @@ async def init_db():
             )
         """)
         await db.commit()
+    await _ensure_table_columns()
 
 # ─── Lifespan ─────────────────────────────────────────
 @asynccontextmanager
@@ -1490,21 +1509,27 @@ Formatting requirements:
     return {"cover_letter": raw.strip()}
 
 
-@app.post("/bookmark", dependencies=[Depends(verify_api_key)])
-async def save_bookmark(req: BookmarkRequest):
+@app.post("/bookmark", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
+async def save_bookmark(req: BookmarkRequest, token_payload: dict = Depends(require_bearer_jwt)):
+    user_email = _user_email_from_payload(token_payload)
+    if not user_email:
+        raise HTTPException(status_code=401, detail="Invalid or missing user identity")
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO bookmarks (session_id, job_title, company, location, salary, match_score, job_data, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (req.session_id, req.job_title, req.company, req.location, req.salary,
+            """INSERT INTO bookmarks (session_id, user_email, job_title, company, location, salary, match_score, job_data, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (req.session_id, user_email, req.job_title, req.company, req.location, req.salary,
              req.match_score, json.dumps(req.job_data), datetime.utcnow().isoformat())
         )
         await db.commit()
     return {"status": "saved"}
 
 
-@app.post("/applications", dependencies=[Depends(verify_api_key)])
-async def create_or_update_application(req: ApplicationCreateRequest):
+@app.post("/applications", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
+async def create_or_update_application(req: ApplicationCreateRequest, token_payload: dict = Depends(require_bearer_jwt)):
+    user_email = _user_email_from_payload(token_payload)
+    if not user_email:
+        raise HTTPException(status_code=401, detail="Invalid or missing user identity")
     allowed_status = {"saved", "applied", "interviewing", "offered", "rejected"}
     status = (req.status or "saved").strip().lower()
     if status not in allowed_status:
@@ -1515,9 +1540,9 @@ async def create_or_update_application(req: ApplicationCreateRequest):
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """SELECT id, applied_at FROM applications
-               WHERE session_id = ? AND job_title = ? AND company = ?
+               WHERE user_email = ? AND job_title = ? AND company = ?
                ORDER BY id DESC LIMIT 1""",
-            (req.session_id, req.job_title, req.company),
+            (user_email, req.job_title, req.company),
         ) as cursor:
             existing = await cursor.fetchone()
 
@@ -1536,9 +1561,9 @@ async def create_or_update_application(req: ApplicationCreateRequest):
         else:
             applied_at = now if status == "applied" else None
             await db.execute(
-                """INSERT INTO applications (session_id, job_title, company, status, notes, applied_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (req.session_id, req.job_title, req.company, status, req.notes or "", applied_at, now),
+                """INSERT INTO applications (session_id, user_email, job_title, company, status, notes, applied_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (req.session_id, user_email, req.job_title, req.company, status, req.notes or "", applied_at, now),
             )
             async with db.execute("SELECT last_insert_rowid()") as cursor:
                 row = await cursor.fetchone()
@@ -1550,14 +1575,15 @@ async def create_or_update_application(req: ApplicationCreateRequest):
 
 
 @app.get("/applications/check", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
-async def check_application_exists(session_id: str, job_title: str, company: str):
+async def check_application_exists(session_id: str, job_title: str, company: str, token_payload: dict = Depends(require_bearer_jwt)):
+    user_email = _user_email_from_payload(token_payload)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """SELECT * FROM applications
-               WHERE session_id = ? AND job_title = ? AND company = ?
+               WHERE user_email = ? AND job_title = ? AND company = ?
                ORDER BY id DESC LIMIT 1""",
-            (session_id, job_title, company),
+            (user_email, job_title, company),
         ) as cursor:
             row = await cursor.fetchone()
 
@@ -1567,22 +1593,23 @@ async def check_application_exists(session_id: str, job_title: str, company: str
     return {"exists": True, "application": dict(row)}
 
 
-@app.get("/applications/{session_id}", dependencies=[Depends(verify_api_key)])
-async def get_applications(session_id: str):
+@app.get("/applications/me", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
+async def get_applications(token_payload: dict = Depends(require_bearer_jwt)):
+    user_email = _user_email_from_payload(token_payload)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
             """SELECT * FROM applications
-               WHERE session_id = ?
+               WHERE user_email = ?
                ORDER BY datetime(created_at) DESC""",
-            (session_id,),
+            (user_email,),
         ) as cursor:
             rows = await cursor.fetchall()
     return {"applications": [dict(row) for row in rows]}
 
 
 @app.patch("/applications/{application_id}", dependencies=[Depends(verify_api_key)])
-async def update_application(application_id: int, req: ApplicationUpdateRequest):
+async def update_application(application_id: int, req: ApplicationUpdateRequest, token_payload: dict = Depends(require_bearer_jwt)):
     if req.status is None and req.notes is None and req.applied_at is None:
         raise HTTPException(status_code=400, detail="Provide at least one field to update")
 
@@ -1616,10 +1643,11 @@ async def update_application(application_id: int, req: ApplicationUpdateRequest)
         params.append(req.applied_at)
 
     params.append(application_id)
+    user_email = _user_email_from_payload(token_payload)
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
-            f"UPDATE applications SET {', '.join(updates)} WHERE id = ?",
-            tuple(params),
+            f"UPDATE applications SET {', '.join(updates)} WHERE id = ? AND user_email = ?",
+            tuple(params + [user_email]),
         )
         await db.commit()
     if cursor.rowcount == 0:
@@ -1627,13 +1655,14 @@ async def update_application(application_id: int, req: ApplicationUpdateRequest)
     return {"status": "updated"}
 
 
-@app.get("/bookmarks/{session_id}", dependencies=[Depends(verify_api_key)])
-async def get_bookmarks(session_id: str):
+@app.get("/bookmarks/me", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
+async def get_bookmarks(token_payload: dict = Depends(require_bearer_jwt)):
+    user_email = _user_email_from_payload(token_payload)
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM bookmarks WHERE session_id = ? ORDER BY created_at DESC",
-            (session_id,)
+            "SELECT * FROM bookmarks WHERE user_email = ? ORDER BY created_at DESC",
+            (user_email,)
         ) as cursor:
             rows = await cursor.fetchall()
     result = []
@@ -1645,9 +1674,10 @@ async def get_bookmarks(session_id: str):
 
 
 @app.delete("/bookmarks/{bookmark_id}", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
-async def delete_bookmark(bookmark_id: int):
+async def delete_bookmark(bookmark_id: int, token_payload: dict = Depends(require_bearer_jwt)):
+    user_email = _user_email_from_payload(token_payload)
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("DELETE FROM bookmarks WHERE id = ?", (bookmark_id,))
+        cursor = await db.execute("DELETE FROM bookmarks WHERE id = ? AND user_email = ?", (bookmark_id, user_email))
         await db.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Bookmark not found")
@@ -1655,9 +1685,10 @@ async def delete_bookmark(bookmark_id: int):
 
 
 @app.delete("/applications/{application_id}", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
-async def delete_application(application_id: int):
+async def delete_application(application_id: int, token_payload: dict = Depends(require_bearer_jwt)):
+    user_email = _user_email_from_payload(token_payload)
     async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute("DELETE FROM applications WHERE id = ?", (application_id,))
+        cursor = await db.execute("DELETE FROM applications WHERE id = ? AND user_email = ?", (application_id, user_email))
         await db.commit()
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Application not found")
