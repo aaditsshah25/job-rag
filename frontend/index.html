@@ -344,21 +344,29 @@
 
         <!-- Search & Filters -->
         <div class="browse-filters-bar">
-          <div class="browse-search-wrap">
-            <svg class="browse-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input id="browseSearchInput" class="browse-search-input" type="text" placeholder="Search by role, skill, or keyword…" autocomplete="off" />
+          <!-- Row 1: keyword search -->
+          <div class="browse-search-row">
+            <div class="browse-search-wrap">
+              <svg class="browse-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input id="browseSearchInput" class="browse-search-input" type="text" placeholder="Search by role, skill, or keyword…" autocomplete="off" />
+            </div>
           </div>
-          <input id="browseLocationFilter" class="browse-filter-input" type="text" placeholder="City or country…" autocomplete="off" />
-          <select id="browseIndustryFilter" class="browse-filter-select">
-            <option value="">All Industries</option>
-            <option value="IT Jobs">IT Jobs</option>
-            <option value="Engineering Jobs">Engineering Jobs</option>
-            <option value="Accounting & Finance Jobs">Accounting &amp; Finance</option>
-            <option value="Sales Jobs">Sales Jobs</option>
-            <option value="Scientific & QA Jobs">Scientific &amp; QA</option>
-          </select>
-          <button id="browseClearBtn" class="btn-secondary browse-clear-btn" type="button">Clear</button>
-          <button id="browseSearchBtn" class="btn-primary browse-go-btn" type="button">Search</button>
+          <!-- Row 2: filters + buttons -->
+          <div class="browse-filter-row">
+            <input id="browseLocationFilter" class="browse-filter-input" type="text" placeholder="City or country…" autocomplete="off" />
+            <select id="browseIndustryFilter" class="browse-filter-select">
+              <option value="">All Industries</option>
+              <option value="IT Jobs">IT Jobs</option>
+              <option value="Engineering Jobs">Engineering Jobs</option>
+              <option value="Accounting & Finance Jobs">Accounting &amp; Finance</option>
+              <option value="Sales Jobs">Sales Jobs</option>
+              <option value="Scientific & QA Jobs">Scientific &amp; QA</option>
+            </select>
+            <div class="browse-filter-actions">
+              <button id="browseClearBtn" class="btn-secondary browse-clear-btn" type="button">Clear</button>
+              <button id="browseSearchBtn" class="btn-primary browse-go-btn" type="button">Search</button>
+            </div>
+          </div>
         </div>
 
         <!-- Job Grid -->

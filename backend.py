@@ -100,7 +100,7 @@ TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
 CSV_PATH          = os.getenv(
     "CSV_PATH",
-    os.path.join(os.path.dirname(__file__), "GENAI_RAG_Dataset - Sheet1.csv")
+    os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
 )
 DB_PATH           = os.getenv("DB_PATH", "./data/jobmatch.db")
 JOBMATCH_API_KEY  = os.getenv("JOBMATCH_API_KEY", "")
@@ -1060,33 +1060,24 @@ def _normalize_pinecone_match(match) -> dict:
 
 def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
     if not OPENAI_API_KEY or not PINECONE_API_KEY:
-        return _search_jobs_local_csv(query, top_k)
+        raise RuntimeError("OPENAI_API_KEY and PINECONE_API_KEY are required for vector search.")
 
-    try:
-        index = get_or_create_index()
-        [query_emb] = embed_texts([query])
-        # Prefer structured salaryMin from profile; fall back to regex extraction from query text
-        salary_min = float(profile_salary_min) if profile_salary_min else _parse_salary_min_from_query(query)
-        pinecone_filter = None
-        if salary_min > 0:
-            pinecone_filter = {"salary_min": {"$gte": salary_min}}
-        results = index.query(vector=query_emb, top_k=top_k, include_metadata=True, filter=pinecone_filter)
+    index = get_or_create_index()
+    [query_emb] = embed_texts([query])
+    # Prefer structured salaryMin from profile; fall back to regex extraction from query text
+    salary_min = float(profile_salary_min) if profile_salary_min else _parse_salary_min_from_query(query)
+    pinecone_filter = None
+    if salary_min > 0:
+        pinecone_filter = {"salary_min": {"$gte": salary_min}}
+    results = index.query(vector=query_emb, top_k=top_k, include_metadata=True, filter=pinecone_filter)
 
-        # Salary metadata can be missing/inconsistent (especially for live feeds).
-        # If a strict salary filter wipes out retrieval, retry without the filter.
-        if salary_min > 0 and not results.matches:
-            log.info("Salary-filtered query returned 0 matches; retrying without salary filter")
-            results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
+    # Salary metadata can be missing/inconsistent (especially for live feeds).
+    # If a strict salary filter wipes out retrieval, retry without the filter.
+    if salary_min > 0 and not results.matches:
+        log.info("Salary-filtered query returned 0 matches; retrying without salary filter")
+        results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
 
-        matches = [_normalize_pinecone_match(m) for m in results.matches]
-        if matches:
-            return matches
-
-        log.info("Vector search returned 0 matches; falling back to local CSV search")
-        return _search_jobs_local_csv(query, top_k)
-    except Exception as exc:
-        log.warning("Vector search failed, falling back to local CSV search: %s", exc)
-        return _search_jobs_local_csv(query, top_k)
+    return [_normalize_pinecone_match(m) for m in results.matches]
 
 def search_jobs_cached(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
     key = hashlib.md5(f"{query}{top_k}{profile_salary_min}".encode()).hexdigest()

@@ -4072,9 +4072,8 @@ body::after {
 /* ── Filters bar ── */
 .browse-filters-bar {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 10px;
-  flex-wrap: wrap;
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-radius: 14px;
@@ -4083,10 +4082,26 @@ body::after {
   margin-bottom: 24px;
 }
 
+.browse-search-row {
+  width: 100%;
+}
+
+.browse-filter-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.browse-filter-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .browse-search-wrap {
   position: relative;
-  flex: 1;
-  min-width: 200px;
+  width: 100%;
 }
 
 .browse-search-icon {
