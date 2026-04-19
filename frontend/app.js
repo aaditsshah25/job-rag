@@ -2523,7 +2523,7 @@ const browseJobsPanel = document.getElementById('browseJobsPanel');
 const browseJobsBtn   = document.getElementById('browseJobsBtn');
 const backFromBrowseBtn = document.getElementById('backFromBrowseBtn');
 
-let browseState = { page: 0, q: '', workType: '', location: '', salaryMin: 0, experienceYears: -1, loading: false };
+let browseState = { page: 0, q: '', location: '', industry: '', loading: false };
 
 function openBrowseJobsView() {
   if (!appMain || !browseJobsPanel || !profilePanel || !resultsPanel) return;
@@ -2634,10 +2634,8 @@ async function fetchAndRenderBrowseJobs() {
     page_size: 18,
   });
   if (browseState.q) params.set('q', browseState.q);
-  if (browseState.workType) params.set('work_type', browseState.workType);
   if (browseState.location) params.set('location', browseState.location);
-  if (browseState.salaryMin > 0) params.set('salary_min', browseState.salaryMin);
-  if (browseState.experienceYears >= 0) params.set('experience_years', browseState.experienceYears);
+  if (browseState.industry) params.set('industry', browseState.industry);
 
   try {
     const token = AUTH.getToken();
@@ -2700,12 +2698,10 @@ browseJobsBtn?.addEventListener('click', () => {
 backFromBrowseBtn?.addEventListener('click', closeBrowseJobsView);
 
 function readBrowseFilters() {
-  browseState.q              = document.getElementById('browseSearchInput')?.value.trim() || '';
-  browseState.workType       = document.getElementById('browseWorkTypeFilter')?.value || '';
-  browseState.location       = document.getElementById('browseLocationFilter')?.value.trim() || '';
-  browseState.salaryMin      = parseInt(document.getElementById('browseSalaryFilter')?.value || '0', 10) || 0;
-  browseState.experienceYears = parseInt(document.getElementById('browseExperienceFilter')?.value ?? '-1', 10);
-  browseState.page           = 0;
+  browseState.q        = document.getElementById('browseSearchInput')?.value.trim() || '';
+  browseState.location = document.getElementById('browseLocationFilter')?.value.trim() || '';
+  browseState.industry = document.getElementById('browseIndustryFilter')?.value || '';
+  browseState.page     = 0;
 }
 
 document.getElementById('browseSearchBtn')?.addEventListener('click', () => {
@@ -2714,13 +2710,12 @@ document.getElementById('browseSearchBtn')?.addEventListener('click', () => {
 });
 
 document.getElementById('browseClearBtn')?.addEventListener('click', () => {
-  const ids = ['browseSearchInput', 'browseLocationFilter', 'browseSalaryFilter'];
-  ids.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-  const wt = document.getElementById('browseWorkTypeFilter');
-  if (wt) wt.value = '';
-  const exp = document.getElementById('browseExperienceFilter');
-  if (exp) exp.value = '-1';
-  browseState = { page: 0, q: '', workType: '', location: '', salaryMin: 0, experienceYears: -1, loading: false };
+  ['browseSearchInput', 'browseLocationFilter'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
+  const ind = document.getElementById('browseIndustryFilter');
+  if (ind) ind.value = '';
+  browseState = { page: 0, q: '', location: '', industry: '', loading: false };
   fetchAndRenderBrowseJobs();
 });
 

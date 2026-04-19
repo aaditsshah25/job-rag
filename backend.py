@@ -2122,18 +2122,56 @@ def _fetch_all_jobs_from_pinecone() -> list[dict]:
     return jobs
 
 
+def _load_adzuna_csv() -> list[dict]:
+    """Load the Adzuna live jobs CSV which has pre-normalised column names."""
+    adzuna_path = os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
+    if not os.path.isfile(adzuna_path):
+        return []
+    df = pd.read_csv(adzuna_path)
+    jobs = []
+    for i in range(len(df)):
+        row = df.iloc[i]
+        skills_raw = _safe_str(row.get("skills", "[]"))
+        try:
+            import ast as _ast
+            skills = _ast.literal_eval(skills_raw) if skills_raw.startswith("[") else _parse_skills(skills_raw)
+        except Exception:
+            skills = _parse_skills(skills_raw)
+        jobs.append({
+            "job_id":       str(row.get("job_id", "")),
+            "title":        _safe_str(row.get("title", "")),
+            "role":         _safe_str(row.get("role", "")),
+            "company":      _safe_str(row.get("company", "")),
+            "location":     _safe_str(row.get("location", "")),
+            "country":      _safe_str(row.get("country", "")),
+            "work_type":    _safe_str(row.get("work_type", "")),
+            "salary":       _safe_str(row.get("salary", "")),
+            "experience":   _safe_str(row.get("experience", "")),
+            "description":  _safe_str(row.get("description", "")),
+            "skills":       [s for s in skills if isinstance(s, str)],
+            "industry":     _safe_str(row.get("industry", "")),
+            "source":       _safe_str(row.get("source", "adzuna")),
+            "external_url": _safe_str(row.get("external_url", "")),
+            "posting_date": _safe_str(row.get("posting_date", "")),
+        })
+    return [j for j in jobs if j["title"]]
+
+
 def _get_browse_jobs() -> list[dict]:
-    """Return cached full job list loaded directly from CSV (all 2000 rows with correct metadata)."""
+    """Return cached full job list. Loads Adzuna CSV; falls back to main CSV."""
     now = time.time()
     if _browse_cache["jobs"] and (now - _browse_cache["fetched_at"]) < _BROWSE_CACHE_TTL:
         return _browse_cache["jobs"]
 
-    df = get_csv_df()
-    jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
+    jobs = _load_adzuna_csv()
+    if not jobs:
+        # Fall back to main dataset CSV
+        df = get_csv_df()
+        jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
 
     _browse_cache["jobs"] = jobs
     _browse_cache["fetched_at"] = now
-    log.info("browse: cache loaded %d jobs from CSV", len(jobs))
+    log.info("browse: cache loaded %d jobs", len(jobs))
     return jobs
 
 
@@ -2142,19 +2180,16 @@ def _get_browse_jobs() -> list[dict]:
 async def browse_jobs(
     request: Request,
     q: str = "",
-    work_type: str = "",
     location: str = "",
-    salary_min: int = 0,
-    experience_years: int = -1,
     industry: str = "",
     page: int = 0,
     page_size: int = 18,
 ):
     """Return a paginated, filterable list of all indexed jobs."""
+    all_jobs = await asyncio.to_thread(_get_browse_jobs)
+
     if q.strip():
         q_lower = q.strip().lower()
-        # Exact text-match against all cached jobs — only return jobs that actually contain the query
-        all_jobs = await asyncio.to_thread(_get_browse_jobs)
         candidates = [
             c for c in all_jobs
             if q_lower in (c.get("title") or "").lower()
@@ -2164,18 +2199,9 @@ async def browse_jobs(
             or any(q_lower in s.lower() for s in (c.get("skills") or []))
         ]
     else:
-        # No keyword: return full cached job list
-        candidates = await asyncio.to_thread(_get_browse_jobs)
+        candidates = list(all_jobs)
 
     # ── Filters ──────────────────────────────────────────
-    if work_type:
-        # Exact match against CSV values: Full-Time, Part-Time, Contract, Intern, Temporary
-        wt_lower = work_type.strip().lower()
-        candidates = [
-            c for c in candidates
-            if (c.get("work_type") or "").strip().lower() == wt_lower
-        ]
-
     if location:
         loc_lower = location.strip().lower()
         candidates = [
@@ -2184,40 +2210,12 @@ async def browse_jobs(
             or loc_lower in (c.get("country") or "").lower()
         ]
 
-    if salary_min > 0:
-        filtered = []
-        for c in candidates:
-            extracted = _extract_salary_min(_safe_str(c.get("salary", "")))
-            # Keep jobs with no salary info (can't verify) or salary above threshold
-            if extracted == 0 or extracted >= salary_min:
-                filtered.append(c)
-        candidates = filtered
-
-    if experience_years >= 0:
-        filtered = []
-        for c in candidates:
-            raw_exp = _safe_str(c.get("experience", ""))
-            if not raw_exp:
-                # No experience info — include it (can't filter what we don't know)
-                filtered.append(c)
-                continue
-            # Extract the minimum required experience (first number in range like "5–15 yrs" → 5)
-            nums = re.findall(r"(\d+)", raw_exp)
-            if not nums:
-                filtered.append(c)
-                continue
-            min_required = int(nums[0])
-            if min_required <= experience_years:
-                filtered.append(c)
-        candidates = filtered
-
     if industry:
-        ind_lower = industry.lower()
+        ind_lower = industry.strip().lower()
         candidates = [
             c for c in candidates
             if ind_lower in (c.get("industry") or "").lower()
             or ind_lower in (c.get("sector") or "").lower()
-            or ind_lower in (c.get("title") or "").lower()
         ]
 
     total = len(candidates)

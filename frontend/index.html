@@ -12,7 +12,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Sans:wght@400;500;600&display=swap"
     rel="stylesheet" />
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%230d6d66' d='M13 2 3 14h7l-1 8 12-12h-7l-1-8z'/%3E%3C/svg%3E" />
-  <link rel="stylesheet" href="style.css?v=9" />
+  <link rel="stylesheet" href="style.css?v=10" />
   <style>
     .required-star {
       color: #ef4444;
@@ -348,23 +348,14 @@
             <svg class="browse-search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input id="browseSearchInput" class="browse-search-input" type="text" placeholder="Search by role, skill, or keyword…" autocomplete="off" />
           </div>
-          <select id="browseWorkTypeFilter" class="browse-filter-select">
-            <option value="">All Job Types</option>
-            <option value="Full-Time">Full-Time</option>
-            <option value="Part-Time">Part-Time</option>
-            <option value="Contract">Contract</option>
-            <option value="Intern">Internship</option>
-            <option value="Temporary">Temporary</option>
-          </select>
           <input id="browseLocationFilter" class="browse-filter-input" type="text" placeholder="City or country…" autocomplete="off" />
-          <input id="browseSalaryFilter" class="browse-filter-input browse-filter-salary" type="number" placeholder="Min salary ($/yr)" min="0" step="10000" autocomplete="off" />
-          <select id="browseExperienceFilter" class="browse-filter-select">
-            <option value="-1">Any Experience</option>
-            <option value="0">0 yrs (Fresher)</option>
-            <option value="2">Up to 2 yrs</option>
-            <option value="5">Up to 5 yrs</option>
-            <option value="8">Up to 8 yrs</option>
-            <option value="15">Up to 15 yrs</option>
+          <select id="browseIndustryFilter" class="browse-filter-select">
+            <option value="">All Industries</option>
+            <option value="IT Jobs">IT Jobs</option>
+            <option value="Engineering Jobs">Engineering Jobs</option>
+            <option value="Accounting & Finance Jobs">Accounting &amp; Finance</option>
+            <option value="Sales Jobs">Sales Jobs</option>
+            <option value="Scientific & QA Jobs">Scientific &amp; QA</option>
           </select>
           <button id="browseClearBtn" class="btn-secondary browse-clear-btn" type="button">Clear</button>
           <button id="browseSearchBtn" class="btn-primary browse-go-btn" type="button">Search</button>
@@ -548,7 +539,7 @@
   <script src="config.js?v=3"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script src="data.js?v=3"></script>
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 
   <div id="toastHost" class="toast-host" aria-live="polite" aria-atomic="true"></div>
 </body>
