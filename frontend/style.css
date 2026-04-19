@@ -4149,6 +4149,7 @@ body::after {
   padding: 9px 14px;
   font-size: 0.875rem;
   color: var(--text-muted);
+  margin-left: auto;
 }
 
 .browse-go-btn {
