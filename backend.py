@@ -1284,11 +1284,19 @@ async def webhook(request: Request):
     session_id = req.sessionId or str(uuid.uuid4())
     history = get_session_history(session_id)
     profile_salary_min = req.profile.salaryMin if req.profile else None
-    candidates = search_jobs_cached(query, top_k=TOP_K, profile_salary_min=profile_salary_min)
+    try:
+        candidates = search_jobs_cached(query, top_k=TOP_K, profile_salary_min=profile_salary_min)
+    except Exception as exc:
+        log.exception("Vector search failed")
+        raise HTTPException(status_code=503, detail=f"Search unavailable: {exc}")
     if not candidates:
         return WebhookResponse(output="No matching jobs found. Please try different search terms.")
-    # Run blocking Gemma call in a thread so the async event loop stays healthy
-    output = await asyncio.to_thread(generate_response, query, candidates, history)
+    try:
+        # Run blocking Gemma call in a thread so the async event loop stays healthy
+        output = await asyncio.to_thread(generate_response, query, candidates, history)
+    except Exception as exc:
+        log.exception("LLM generation failed")
+        raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
     save_session_turn(session_id, query, output)
     log.info("[%s] /webhook done, session=%s", request_id, session_id)
     return WebhookResponse(output=output)
@@ -1434,19 +1442,18 @@ async def parse_resume(file: UploadFile = File(...)):
 Resume text:
 {text[:3000]}"""
 
-    raw = await gemini_generate_async(
-        prompt,
-        genai.types.GenerationConfig(temperature=0, max_output_tokens=500),
-    )
+    try:
+        raw = await gemini_generate_async(
+            prompt,
+            genai.types.GenerationConfig(temperature=0, max_output_tokens=500),
+        )
+    except Exception as exc:
+        log.exception("parse_resume LLM call failed")
+        raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
 
-    parsed = _parse_model_json_or_default(
-        raw,
-        {},
-        "parse_resume",
-    )
-
+    parsed = _parse_model_json_or_default(raw, {}, "parse_resume")
     parsed["raw_text"] = text[:4000]
-    parsed["resume_text"] = parsed["raw_text"]  # alias for compatibility
+    parsed["resume_text"] = parsed["raw_text"]
     return parsed
 
 
