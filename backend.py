@@ -152,6 +152,12 @@ def get_gemini():
         _gemini_model = genai.GenerativeModel(CHAT_MODEL)
     return _gemini_model
 
+async def gemini_generate_async(prompt: str, generation_config) -> str:
+    """Run a blocking Gemma/Gemini generate_content call in a thread pool."""
+    def _call():
+        return get_gemini().generate_content(prompt, generation_config=generation_config).text
+    return await asyncio.to_thread(_call)
+
 def get_pinecone() -> Pinecone:
     global _pc
     if _pc is None:
@@ -1266,7 +1272,8 @@ async def webhook(request: Request):
     candidates = search_jobs_cached(query, top_k=TOP_K, profile_salary_min=profile_salary_min)
     if not candidates:
         return WebhookResponse(output="No matching jobs found. Please try different search terms.")
-    output = generate_response(query, candidates, history)
+    # Run blocking Gemma call in a thread so the async event loop stays healthy
+    output = await asyncio.to_thread(generate_response, query, candidates, history)
     save_session_turn(session_id, query, output)
     log.info("[%s] /webhook done, session=%s", request_id, session_id)
     return WebhookResponse(output=output)
@@ -1412,14 +1419,13 @@ async def parse_resume(file: UploadFile = File(...)):
 Resume text:
 {text[:3000]}"""
 
-    model = get_gemini()
-    response = model.generate_content(
+    raw = await gemini_generate_async(
         prompt,
-        generation_config=genai.types.GenerationConfig(temperature=0, max_output_tokens=500),
+        genai.types.GenerationConfig(temperature=0, max_output_tokens=500),
     )
 
     parsed = _parse_model_json_or_default(
-        response.text,
+        raw,
         {},
         "parse_resume",
     )
