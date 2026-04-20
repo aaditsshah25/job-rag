@@ -1,8 +1,33 @@
 {
   "version": 2,
-  "outputDirectory": "frontend",
+  "builds": [
+    {
+      "src": "main.py",
+      "use": "@vercel/python"
+    },
+    {
+      "src": "frontend/**",
+      "use": "@vercel/static"
+    }
+  ],
   "routes": [
-    { "src": "/(.*)", "dest": "/$1" }
+    { "src": "/health", "dest": "main.py" },
+    { "src": "/webhook", "dest": "main.py" },
+    { "src": "/parse-resume", "dest": "main.py" },
+    { "src": "/cover-letter", "dest": "main.py" },
+    { "src": "/bookmark(.*)", "dest": "main.py" },
+    { "src": "/bookmarks(.*)", "dest": "main.py" },
+    { "src": "/feedback", "dest": "main.py" },
+    { "src": "/send-results", "dest": "main.py" },
+    { "src": "/index", "dest": "main.py" },
+    { "src": "/debug(.*)", "dest": "main.py" },
+    { "src": "/auth(.*)", "dest": "main.py" },
+    { "src": "/sources(.*)", "dest": "main.py" },
+    { "src": "/jobs(.*)", "dest": "main.py" },
+    { "src": "/applications(.*)", "dest": "main.py" },
+    { "src": "/alerts(.*)", "dest": "main.py" },
+    { "src": "/resume(.*)", "dest": "main.py" },
+    { "src": "/(.*)", "dest": "frontend/$1" }
   ],
   "headers": [
     {
