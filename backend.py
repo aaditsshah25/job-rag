@@ -34,7 +34,12 @@ from urllib.parse import urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError, HTTPError
 
-import pandas as pd
+try:
+    import pandas as pd
+    _PANDAS_AVAILABLE = True
+except Exception:
+    pd = None  # type: ignore[assignment]
+    _PANDAS_AVAILABLE = False
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -42,11 +47,24 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 from openai import OpenAI
-import google.generativeai as genai
+try:
+    import google.generativeai as genai
+    _GENAI_AVAILABLE = True
+except Exception:
+    genai = None  # type: ignore[assignment]
+    _GENAI_AVAILABLE = False
 from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
 import aiosqlite
-from source_ingestion import fetch_configured_sources_with_stats, get_source_config
+try:
+    from source_ingestion import fetch_configured_sources_with_stats, get_source_config
+    _SOURCE_INGESTION_AVAILABLE = True
+except Exception:
+    _SOURCE_INGESTION_AVAILABLE = False
+    def fetch_configured_sources_with_stats():  # type: ignore[misc]
+        return [], {}
+    def get_source_config():  # type: ignore[misc]
+        return {"enabled_sources": [], "india_only": True, "include_remote": True}
 
 try:
     from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -160,6 +178,8 @@ def get_openai() -> OpenAI:
 
 def get_gemini():
     global _gemini_model
+    if not _GENAI_AVAILABLE:
+        raise RuntimeError("google-generativeai is not installed or failed to import.")
     if _gemini_model is None:
         if not GOOGLE_API_KEY:
             raise RuntimeError("GOOGLE_API_KEY is not set.")
@@ -169,6 +189,8 @@ def get_gemini():
 
 async def gemini_generate_async(prompt: str, generation_config) -> str:
     """Run a blocking Gemma/Gemini generate_content call in a thread pool."""
+    if not _GENAI_AVAILABLE:
+        raise RuntimeError("google-generativeai is not available.")
     def _call():
         return get_gemini().generate_content(prompt, generation_config=generation_config).text
     return await asyncio.to_thread(_call)
@@ -189,6 +211,8 @@ _csv_df = None
 
 def get_csv_df():
     global _csv_df
+    if not _PANDAS_AVAILABLE:
+        return None  # type: ignore[return-value]
     if _csv_df is None or _csv_df.empty:
         candidate_paths = [
             CSV_PATH,
@@ -580,6 +604,15 @@ def _parse_skills(raw: str) -> list[str]:
     raw = _safe_str(raw)
     if not raw:
         return []
+    # Handle JSON-encoded list strings like '[]' or '["Python","SQL"]'
+    stripped = raw.strip()
+    if stripped.startswith("["):
+        try:
+            items = json.loads(stripped)
+            if isinstance(items, list):
+                return [s.strip() for s in items if isinstance(s, str) and s.strip()]
+        except Exception:
+            pass
     raw = re.sub(r"\([^)]*\)", "", raw)
     return [s.strip() for s in re.split(r"[,\n]", raw) if s.strip()]
 
@@ -1061,7 +1094,7 @@ def _tokenize_query(query: str) -> list[str]:
 
 def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
     df = get_csv_df()
-    if df.empty:
+    if df is None or df.empty:
         return []
 
     tokens = _tokenize_query(query)
@@ -1411,13 +1444,14 @@ def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
 def _is_renderable_jobmatch_output(text: str) -> bool:
     if not text:
         return False
+    # Accept output that has the heading OR at least one job block (### )
     has_heading = "# Your Job Match Results" in text
     has_job_blocks = "### " in text
-    return has_heading and has_job_blocks
+    return has_heading or has_job_blocks
 
 
 def generate_response(user_query: str, candidates: list[dict], history: list = None) -> str:
-    if not GOOGLE_API_KEY:
+    if not GOOGLE_API_KEY or not _GENAI_AVAILABLE:
         return _basic_jobmatch_markdown(candidates)
 
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
@@ -1447,8 +1481,11 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
     # Gemma can prepend reasoning before the final markdown block.
     marker = "# Your Job Match Results"
     idx = text.rfind(marker)
-    if idx > 0:
+    if idx >= 0:
         text = text[idx:]
+    elif "### " in text:
+        # No heading but has job blocks — prepend the heading so frontend parses it
+        text = f"{marker}\n\n## Top Job Matches\n\n{text}"
 
     if not _is_renderable_jobmatch_output(text):
         log.warning("Gemini/Gemma output was not renderable by frontend parser; using deterministic fallback.")
@@ -1623,7 +1660,7 @@ async def parse_resume(file: UploadFile = File(...)):
 
     basic = _extract_resume_basics(text)
 
-    if not GOOGLE_API_KEY:
+    if not GOOGLE_API_KEY or not _GENAI_AVAILABLE:
         return {
             **basic,
             "raw_text": text[:4000],
