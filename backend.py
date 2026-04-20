@@ -2523,7 +2523,11 @@ def _get_browse_jobs() -> list[dict]:
     if not jobs:
         # Fall back to main dataset CSV
         df = get_csv_df()
-        jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
+        if df is not None and not df.empty:
+            jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
+    if not jobs and PINECONE_API_KEY:
+        # Last resort: fetch all jobs from Pinecone index
+        jobs = _fetch_all_jobs_from_pinecone()
 
     _browse_cache["jobs"] = jobs
     _browse_cache["fetched_at"] = now
