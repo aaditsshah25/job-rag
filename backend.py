@@ -684,12 +684,64 @@ def _markdown_to_email_html(markdown: str) -> str:
 
 
 def _strip_model_json(raw: str) -> str:
-    """Strip markdown code fences that Gemma/Gemini often wraps around JSON."""
+    """Extract the first valid JSON object/array from model output.
+
+    Gemma 4 (and some Gemini configs) emit chain-of-thought preamble before
+    the final JSON.  We try several extraction strategies in order:
+    1. Strip markdown code fences and parse directly.
+    2. Find the last { … } or [ … ] block in the text (handles CoT preamble).
+    3. Return the stripped text as-is (let the caller handle parse errors).
+    """
     raw = raw.strip()
-    # Remove ```json ... ``` or ``` ... ``` blocks
-    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
-    raw = re.sub(r"\s*```$", "", raw)
-    return raw.strip()
+
+    # Strategy 1 — strip code fences only
+    cleaned = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*```\s*$", "", cleaned).strip()
+    try:
+        json.loads(cleaned)
+        return cleaned
+    except Exception:
+        pass
+
+    # Strategy 2 — find the last JSON object in the text (handles CoT preamble)
+    # Look for the last occurrence of { or [ and match to its closing bracket.
+    for start_char, end_char in [('{', '}'), ('[', ']')]:
+        last_start = raw.rfind(start_char)
+        if last_start == -1:
+            continue
+        # Find the matching closing bracket by counting depth
+        depth = 0
+        in_string = False
+        escape_next = False
+        end_pos = -1
+        for i, ch in enumerate(raw[last_start:], start=last_start):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == '\\' and in_string:
+                escape_next = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == start_char:
+                depth += 1
+            elif ch == end_char:
+                depth -= 1
+                if depth == 0:
+                    end_pos = i
+                    break
+        if end_pos != -1:
+            candidate = raw[last_start:end_pos + 1]
+            try:
+                json.loads(candidate)
+                return candidate
+            except Exception:
+                pass
+
+    return cleaned
 
 def _parse_model_json_or_default(raw: str, default, context: str):
     try:
