@@ -113,7 +113,7 @@ CHAT_MODEL        = (
     os.getenv("GEMMA_CHAT_MODEL", "").strip()
     or os.getenv("GOOGLE_CHAT_MODEL", "").strip()
     or os.getenv("OPENAI_CHAT_MODEL", "").strip()
-    or "gemma-4-31b-it"
+    or "gemma-3-27b-it"
 )
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
@@ -157,6 +157,15 @@ if not JWT_SECRET:
 JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
+# Warn if a non-existent model is configured
+_KNOWN_GEMINI_MODELS = {"gemma-3-27b-it", "gemma-3-12b-it", "gemma-3-4b-it", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"}
+if CHAT_MODEL not in _KNOWN_GEMINI_MODELS:
+    log.warning(
+        "CHAT_MODEL '%s' is not in the known-good list. If requests fail, set GEMMA_CHAT_MODEL=gemini-1.5-flash in your env.",
+        CHAT_MODEL,
+    )
+log.info("Using LLM model: %s", CHAT_MODEL)
+
 # ─── Lazy singletons ──────────────────────────────────
 _openai_client = None
 _gemini_model = None
@@ -193,7 +202,7 @@ def _gemini_http_generate(prompt: str, temperature: float = 0.3, max_tokens: int
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
     }
-    resp = _httpx.post(url, params={"key": GOOGLE_API_KEY}, json=payload, timeout=30)
+    resp = _httpx.post(url, params={"key": GOOGLE_API_KEY}, json=payload, timeout=55)
     resp.raise_for_status()
     data = resp.json()
     candidates = data.get("candidates", [])
@@ -1441,12 +1450,14 @@ def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
 
 def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
     top = candidates[: max(1, TOP_N_RESULTS)]
+    best_score = max((round((c.get('score', 0) or 0) * 10, 1) for c in top), default=0)
     lines = [
         "# Your Job Match Results",
         "",
         "## Summary",
         f"- Jobs Analyzed: {len(candidates)}",
         f"- Top Matches: {len(top)}",
+        f"- Best Match Score: {best_score}/10",
         "",
         "## Top Job Matches",
         "",
@@ -1457,21 +1468,25 @@ def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
         location = ", ".join([x for x in [c.get("location", ""), c.get("country", "")] if x]) or "N/A"
         salary = c.get("salary", "Not listed")
         skills = ", ".join(c.get("skills", [])[:6]) or "Not listed"
+        score = round((c.get('score', 0) or 0) * 10, 1)
         lines.extend([
             f"### {title} @ {company}",
-            f"- Match Score: {round((c.get('score', 0) or 0) * 10, 1)}/10",
-            f"- Location: {location}",
-            f"- Salary: {salary}",
-            f"- Role: {c.get('role', '') or 'Not specified'}",
-            f"- Apply Link: {c.get('external_url', '') or 'Not provided'}",
-            f"- Job Description: {(c.get('description', '') or 'Not provided')[:220]}",
-            f"- Skills: {skills}",
+            f"- **Match Score: {score}/10 | Location: {location} | Salary: {salary}**",
+            f"- **Role:** {c.get('role', '') or 'Not specified'}",
+            f"- **Apply Link:** {c.get('external_url', '') or 'Not provided'}",
+            f"- **Job Description:** {(c.get('description', '') or 'Not provided')[:220]}",
+            "",
+            "**Why It Matches:**",
+            f"- Skills include: {skills}",
+            "",
+            "---",
             "",
         ])
-    lines.extend([
-        "## Note",
-        f"- {note or 'Running in basic mode without API key. Results are keyword-based from the local dataset.'}",
-    ])
+    if note:
+        lines.extend([
+            "## Note",
+            f"- {note}",
+        ])
     return "\n".join(lines)
 
 
@@ -1522,7 +1537,7 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "2.0.0", "chat_model": CHAT_MODEL}
 
 
 @app.get("/auth/config")
