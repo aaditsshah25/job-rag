@@ -193,7 +193,7 @@ def _gemini_http_generate(prompt: str, temperature: float = 0.3, max_tokens: int
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
     }
-    resp = _httpx.post(url, params={"key": GOOGLE_API_KEY}, json=payload, timeout=120)
+    resp = _httpx.post(url, params={"key": GOOGLE_API_KEY}, json=payload, timeout=30)
     resp.raise_for_status()
     data = resp.json()
     candidates = data.get("candidates", [])
@@ -1489,10 +1489,10 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
         return _basic_jobmatch_markdown(candidates)
 
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
-    user_msg = build_llm_prompt(user_query, candidates)
+    user_msg = build_llm_prompt(user_query, candidates[:10])  # cap at 10 to keep prompt short
     full_prompt = f"{system}\n\n{user_msg}"
     try:
-        text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=4096)
+        text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=1500)
         text = (text or "").strip()
     except Exception as exc:
         log.warning("Gemini/Gemma generation failed, falling back to deterministic response: %s", exc)
