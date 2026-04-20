@@ -1,5 +1,6 @@
 // JobMatch AI - Runtime Configuration
 // Frontend is on Vercel; backend runs on Railway.
+// Deployment trigger: 2026-04-20
 const DEFAULT_API_BASE_URL = 'https://job-rag-production.up.railway.app';
 
 const CONFIG = {
