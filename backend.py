@@ -444,7 +444,8 @@ async def lifespan(app: FastAPI):
         log.error("DB init failed (non-fatal): %s", e)
     if OPENAI_API_KEY and PINECONE_API_KEY:
         try:
-            index_dataset(force=False)
+            force_reindex = _env_flag("FORCE_REINDEX", default=False)
+            index_dataset(force=force_reindex)
         except Exception as e:
             log.error("Auto-index failed: %s", e)
     yield
@@ -640,6 +641,92 @@ def _parse_experience(raw: str) -> str:
     if m:
         return f"{m.group(1)}\u2013{m.group(2)} yrs"
     return raw
+
+# Comprehensive skill keyword list for extraction from description text
+_SKILL_KEYWORDS = [
+    # Languages
+    "python", "java", "javascript", "typescript", "c++", "c#", "go", "golang", "rust", "scala",
+    "kotlin", "swift", "ruby", "php", "r", "matlab", "bash", "shell", "perl",
+    # Web
+    "react", "angular", "vue", "node.js", "nodejs", "next.js", "django", "fastapi", "flask",
+    "spring", "spring boot", "express", "graphql", "rest api", "html", "css",
+    # Data / ML
+    "machine learning", "deep learning", "nlp", "natural language processing", "computer vision",
+    "tensorflow", "pytorch", "keras", "scikit-learn", "pandas", "numpy", "spark", "hadoop",
+    "airflow", "dbt", "sql", "nosql", "postgresql", "mysql", "mongodb", "redis", "elasticsearch",
+    "tableau", "power bi", "looker", "data pipeline", "etl", "data warehouse",
+    # Cloud / Infra
+    "aws", "azure", "gcp", "google cloud", "kubernetes", "docker", "terraform", "ansible",
+    "ci/cd", "jenkins", "github actions", "linux", "microservices", "kafka", "rabbitmq",
+    # Other
+    "git", "agile", "scrum", "jira", "confluence", "salesforce", "sap",
+    "llm", "generative ai", "langchain", "openai", "vector database", "pinecone",
+]
+
+def _extract_skills_from_text(text: str) -> list[str]:
+    """Extract skill keywords from free-form description/title text."""
+    if not text:
+        return []
+    lower = text.lower()
+    found = []
+    seen = set()
+    for skill in _SKILL_KEYWORDS:
+        pattern = r'\b' + re.escape(skill) + r'\b'
+        if re.search(pattern, lower) and skill not in seen:
+            seen.add(skill)
+            found.append(skill)
+    return found
+
+# Infer likely skills from role title when description is too short/generic
+_ROLE_SKILL_MAP = {
+    "data scientist": ["python", "machine learning", "sql", "pandas", "numpy", "tensorflow", "pytorch"],
+    "data engineer": ["python", "sql", "spark", "aws", "airflow", "etl", "data pipeline"],
+    "data analyst": ["sql", "python", "tableau", "power bi", "excel", "pandas"],
+    "machine learning": ["python", "machine learning", "tensorflow", "pytorch", "scikit-learn", "nlp"],
+    "ml engineer": ["python", "machine learning", "tensorflow", "pytorch", "docker", "kubernetes", "aws"],
+    "backend": ["python", "java", "sql", "rest api", "microservices", "docker"],
+    "frontend": ["javascript", "react", "typescript", "html", "css", "vue"],
+    "full stack": ["javascript", "react", "python", "sql", "rest api", "docker"],
+    "devops": ["docker", "kubernetes", "aws", "terraform", "ci/cd", "linux", "ansible"],
+    "cloud": ["aws", "azure", "gcp", "terraform", "kubernetes", "docker"],
+    "sre": ["linux", "kubernetes", "docker", "python", "monitoring", "aws"],
+    "security": ["linux", "python", "aws", "networking", "security"],
+    "android": ["kotlin", "java", "android", "git"],
+    "ios": ["swift", "ios", "git"],
+    "product manager": ["agile", "scrum", "jira", "product management"],
+    "software engineer": ["python", "java", "sql", "git", "agile"],
+    "software development": ["python", "java", "sql", "git", "agile"],
+}
+
+def _infer_skills_from_title(title: str, role: str) -> list[str]:
+    """Infer likely skills from job title/role when description doesn't mention them."""
+    combined = f"{title} {role}".lower()
+    inferred = []
+    seen = set()
+    for keyword, skills in _ROLE_SKILL_MAP.items():
+        if keyword in combined:
+            for s in skills:
+                if s not in seen:
+                    seen.add(s)
+                    inferred.append(s)
+    return inferred
+
+def _extract_experience_from_text(text: str) -> str:
+    """Extract experience requirement from description text."""
+    if not text:
+        return ""
+    patterns = [
+        r'(\d+)\+?\s*[-–to]+\s*(\d+)\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp)',
+        r'(\d+)\+\s*(?:years?|yrs?)\s*(?:of\s+)?(?:experience|exp)',
+        r'(?:minimum|min\.?|at least)\s+(\d+)\s*(?:years?|yrs?)',
+        r'(\d+)\s*(?:years?|yrs?)\s*(?:of\s+)?(?:relevant\s+)?experience',
+    ]
+    lower = text.lower()
+    for pat in patterns:
+        m = re.search(pat, lower)
+        if m:
+            return m.group(0).strip()
+    return ""
 
 def _parse_benefits(raw: str) -> list[str]:
     raw = _safe_str(raw)
@@ -907,6 +994,26 @@ def clean_row(row) -> dict:
     industry = _safe_str(_pick("Industry", "industry")) or profile.get("Industry", "")
     company_size = _safe_str(_pick("Company Size", "company_size"))
 
+    description = _safe_str(_pick("Job Description", "description"))
+    responsibilities = _safe_str(_pick("Responsibilities", "responsibilities"))
+    experience = _parse_experience(_safe_str(_pick("Experience", "experience")))
+
+    title_val = _safe_str(_pick("Job Title", "title"))
+    role_val = _safe_str(_pick("Role", "role"))
+
+    # If skills empty (common with Adzuna data), extract from description text
+    if not skills:
+        combined_text = f"{description} {responsibilities}"
+        skills = _extract_skills_from_text(combined_text)
+    # If still empty, infer from title/role
+    if not skills:
+        skills = _infer_skills_from_title(title_val, role_val)
+
+    # If experience missing, extract from description
+    if not experience:
+        combined_text = f"{description} {responsibilities}"
+        experience = _extract_experience_from_text(combined_text)
+
     return {
         "job_id":           _safe_str(_pick("Job Id", "job_id")),
         "title":            _safe_str(_pick("Job Title", "title")),
@@ -916,11 +1023,11 @@ def clean_row(row) -> dict:
         "country":          _safe_str(_pick("Country", "country")),
         "work_type":        _safe_str(_pick("Work Type", "work_type")),
         "company_size":     company_size,
-        "experience":       _parse_experience(_safe_str(_pick("Experience", "experience"))),
+        "experience":       experience,
         "qualifications":   _safe_str(_pick("Qualifications", "qualifications")),
         "salary":           _parse_salary(_safe_str(_pick("Salary Range", "salary"))),
-        "description":      _safe_str(_pick("Job Description", "description")),
-        "responsibilities": _safe_str(_pick("Responsibilities", "responsibilities")),
+        "description":      description,
+        "responsibilities": responsibilities,
         "skills":           skills,
         "benefits":         benefits,
         "sector":           sector,
@@ -932,22 +1039,31 @@ def clean_row(row) -> dict:
     }
 
 def job_to_text(job: dict) -> str:
+    """
+    Build the text representation used for embedding.
+    Title/Role/Skills are repeated to boost their weight in the embedding space.
+    """
+    title = job.get('title', '')
+    role = job.get('role', '')
+    skills = job.get('skills', [])
+    skills_str = ', '.join(skills[:20])
+    description = job.get('description', '')
+    experience = job.get('experience', '')
+    industry = job.get('industry', '')
+
     parts = [
-        f"Title: {job['title']}",
-        f"Role: {job['role']}",
-        f"Company: {job['company']}",
-        f"Location: {job['location']}, {job['country']}",
-        f"Work Type: {job['work_type']}",
-        f"Experience: {job['experience']}",
-        f"Qualifications: {job['qualifications']}",
-        f"Salary: {job['salary']}",
-        f"Sector: {job['sector']} | Industry: {job['industry']}",
-        f"Skills: {', '.join(job['skills'][:15])}",
-        f"Benefits: {', '.join(job['benefits'][:8])}",
-        f"Description: {job['description'][:400]}",
-        f"Responsibilities: {job['responsibilities'][:300]}",
-        f"Source: {job.get('source', 'local_csv')}",
-        f"URL: {job.get('external_url', '')}",
+        # Repeat title/role for embedding weight
+        f"{title} {role}",
+        f"Job Title: {title}",
+        f"Role: {role}",
+        f"Industry: {industry}",
+        f"Location: {job.get('location', '')}, {job.get('country', '')}",
+        f"Experience Required: {experience}",
+        f"Required Skills: {skills_str}",
+        # Repeat skills for weight
+        f"Technologies and Skills: {skills_str}",
+        f"Description: {description[:500]}",
+        f"Company: {job.get('company', '')}",
     ]
     return "\n".join(p for p in parts if not p.endswith(": "))
 
@@ -1375,12 +1491,12 @@ SYSTEM_PROMPT = """You are JobMatch AI, a precise and expert career advisor.
 
 You will receive a user's job-seeking profile and a list of candidate job postings retrieved via semantic search. Act as a senior recruiter: critically evaluate each candidate posting against the user's profile and select the best {top_n} matches.
 
-SCORING CRITERIA (be strict and realistic):
-- 9-10: Near-perfect fit — role, skills, experience, location, and salary all align closely
-- 7-8: Strong fit — most key criteria match with minor gaps
-- 5-6: Moderate fit — role aligns but notable gaps in skills or experience
-- 3-4: Weak fit — only surface-level match
-- Do NOT inflate scores. A score of 9+ should be rare and well-justified.
+SCORING CRITERIA (be realistic — note: salary and experience data is often missing from job postings, so base your score primarily on role fit, skill overlap, and industry alignment):
+- 8-10: Strong fit — role title, required skills, and industry align well with the candidate's profile
+- 6-7: Good fit — role aligns, candidate has most relevant skills, minor gaps are acceptable
+- 4-5: Moderate fit — related role or transferable skills, some gaps
+- 2-3: Weak fit — only partial or surface-level match
+- Always show all {top_n} jobs even if scores are moderate — the user needs results to choose from.
 
 YOUR RESPONSE MUST START IMMEDIATELY WITH THE LINE "# Your Job Match Results" — NO preamble, NO introduction, NO thinking out loud.
 
