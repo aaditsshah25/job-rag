@@ -94,7 +94,12 @@ PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
 EMBED_MODEL       = "text-embedding-3-small"
-CHAT_MODEL        = os.getenv("GEMMA_CHAT_MODEL", "gemma-4-31b-it")
+CHAT_MODEL        = (
+    os.getenv("GEMMA_CHAT_MODEL", "").strip()
+    or os.getenv("GOOGLE_CHAT_MODEL", "").strip()
+    or os.getenv("OPENAI_CHAT_MODEL", "").strip()
+    or "gemma-4-31b-it"
+)
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
@@ -1315,41 +1320,53 @@ def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
         f"Select the top {TOP_N_RESULTS} best matches for this user and respond in the required Markdown format."
     )
 
+def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
+    top = candidates[: max(1, TOP_N_RESULTS)]
+    lines = [
+        "# Your Job Match Results",
+        "",
+        "## Summary",
+        f"- Jobs Analyzed: {len(candidates)}",
+        f"- Top Matches: {len(top)}",
+        "",
+        "## Top Job Matches",
+        "",
+    ]
+    for c in top:
+        title = c.get("title", "Unknown Role")
+        company = c.get("company", "Unknown Company")
+        location = ", ".join([x for x in [c.get("location", ""), c.get("country", "")] if x]) or "N/A"
+        salary = c.get("salary", "Not listed")
+        skills = ", ".join(c.get("skills", [])[:6]) or "Not listed"
+        lines.extend([
+            f"### {title} @ {company}",
+            f"- Match Score: {round((c.get('score', 0) or 0) * 10, 1)}/10",
+            f"- Location: {location}",
+            f"- Salary: {salary}",
+            f"- Role: {c.get('role', '') or 'Not specified'}",
+            f"- Apply Link: {c.get('external_url', '') or 'Not provided'}",
+            f"- Job Description: {(c.get('description', '') or 'Not provided')[:220]}",
+            f"- Skills: {skills}",
+            "",
+        ])
+    lines.extend([
+        "## Note",
+        f"- {note or 'Running in basic mode without API key. Results are keyword-based from the local dataset.'}",
+    ])
+    return "\n".join(lines)
+
+
+def _is_renderable_jobmatch_output(text: str) -> bool:
+    if not text:
+        return False
+    has_heading = "# Your Job Match Results" in text
+    has_job_blocks = "### " in text
+    return has_heading and has_job_blocks
+
+
 def generate_response(user_query: str, candidates: list[dict], history: list = None) -> str:
     if not GOOGLE_API_KEY:
-        top = candidates[: max(1, TOP_N_RESULTS)]
-        lines = [
-            "# Your Job Match Results",
-            "",
-            "## Summary",
-            f"- Jobs Analyzed: {len(candidates)}",
-            f"- Top Matches: {len(top)}",
-            "",
-            "## Top Job Matches",
-            "",
-        ]
-        for c in top:
-            title = c.get("title", "Unknown Role")
-            company = c.get("company", "Unknown Company")
-            location = ", ".join([x for x in [c.get("location", ""), c.get("country", "")] if x]) or "N/A"
-            salary = c.get("salary", "Not listed")
-            skills = ", ".join(c.get("skills", [])[:6]) or "Not listed"
-            lines.extend([
-                f"### {title} @ {company}",
-                f"- Match Score: {round((c.get('score', 0) or 0) * 10, 1)}/10",
-                f"- Location: {location}",
-                f"- Salary: {salary}",
-                f"- Role: {c.get('role', '') or 'Not specified'}",
-                f"- Apply Link: {c.get('external_url', '') or 'Not provided'}",
-                f"- Job Description: {(c.get('description', '') or 'Not provided')[:220]}",
-                f"- Skills: {skills}",
-                "",
-            ])
-        lines.extend([
-            "## Note",
-            "- Running in basic mode without API key. Results are keyword-based from the local dataset.",
-        ])
-        return "\n".join(lines)
+        return _basic_jobmatch_markdown(candidates)
 
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
     user_msg = build_llm_prompt(user_query, candidates)
@@ -1362,17 +1379,31 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
     full_prompt = f"{system}\n\n{user_msg}"
     model = get_gemini()
     chat = model.start_chat(history=chat_history)
-    response = chat.send_message(
-        full_prompt,
-        generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=4096),
-    )
-    text = response.text.strip()
-    # Gemma 4 outputs chain-of-thought then the final answer.
-    # The real formatted section is the LAST occurrence of the heading.
+    try:
+        response = chat.send_message(
+            full_prompt,
+            generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=4096),
+        )
+        text = (response.text or "").strip()
+    except Exception as exc:
+        log.warning("Gemini/Gemma generation failed, falling back to deterministic response: %s", exc)
+        return _basic_jobmatch_markdown(
+            candidates,
+            "AI ranking is temporarily unavailable, so these results use deterministic retrieval ranking.",
+        )
+
+    # Gemma can prepend reasoning before the final markdown block.
     marker = "# Your Job Match Results"
     idx = text.rfind(marker)
     if idx > 0:
         text = text[idx:]
+
+    if not _is_renderable_jobmatch_output(text):
+        log.warning("Gemini/Gemma output was not renderable by frontend parser; using deterministic fallback.")
+        return _basic_jobmatch_markdown(
+            candidates,
+            "AI output format was inconsistent, so a reliable fallback format was used.",
+        )
     return text
 
 # ─── Endpoints ────────────────────────────────────────
