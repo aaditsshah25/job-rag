@@ -47,12 +47,9 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 from openai import OpenAI
-try:
-    import google.generativeai as genai
-    _GENAI_AVAILABLE = True
-except Exception:
-    genai = None  # type: ignore[assignment]
-    _GENAI_AVAILABLE = False
+import httpx as _httpx
+genai = None  # SDK not used; we call Gemini via REST
+_GENAI_AVAILABLE = True  # always available via HTTP
 from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
 import aiosqlite
@@ -177,23 +174,42 @@ def get_openai() -> OpenAI:
     return _openai_client
 
 def get_gemini():
-    global _gemini_model
-    if not _GENAI_AVAILABLE:
-        raise RuntimeError("google-generativeai is not installed or failed to import.")
-    if _gemini_model is None:
-        if not GOOGLE_API_KEY:
-            raise RuntimeError("GOOGLE_API_KEY is not set.")
-        genai.configure(api_key=GOOGLE_API_KEY)
-        _gemini_model = genai.GenerativeModel(CHAT_MODEL)
-    return _gemini_model
+    """No-op — Gemini is called via HTTP, not SDK. Kept for compat."""
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY is not set.")
+    return None  # sentinel: use _gemini_http_generate instead
 
-async def gemini_generate_async(prompt: str, generation_config) -> str:
-    """Run a blocking Gemma/Gemini generate_content call in a thread pool."""
-    if not _GENAI_AVAILABLE:
-        raise RuntimeError("google-generativeai is not available.")
-    def _call():
-        return get_gemini().generate_content(prompt, generation_config=generation_config).text
-    return await asyncio.to_thread(_call)
+def _gemini_http_generate(prompt: str, temperature: float = 0.3, max_tokens: int = 4096) -> str:
+    """Call Gemini/Gemma via REST API (no SDK required)."""
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY is not set.")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{CHAT_MODEL}:generateContent"
+    payload = {
+        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
+    }
+    resp = _httpx.post(url, params={"key": GOOGLE_API_KEY}, json=payload, timeout=120)
+    resp.raise_for_status()
+    data = resp.json()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError(f"Gemini returned no candidates: {data}")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "".join(p.get("text", "") for p in parts)
+
+async def gemini_generate_async(prompt: str, generation_config=None) -> str:
+    """Async wrapper around the HTTP Gemini call."""
+    temperature = 0.3
+    max_tokens = 4096
+    if generation_config is not None:
+        # Accept a dict or a SimpleNamespace with temperature/maxOutputTokens
+        if isinstance(generation_config, dict):
+            temperature = generation_config.get("temperature", temperature)
+            max_tokens = generation_config.get("maxOutputTokens", max_tokens)
+        else:
+            temperature = getattr(generation_config, "temperature", temperature)
+            max_tokens = getattr(generation_config, "max_output_tokens", max_tokens)
+    return await asyncio.to_thread(_gemini_http_generate, prompt, temperature, max_tokens)
 
 def get_pinecone() -> Pinecone:
     global _pc
@@ -1456,21 +1472,10 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
 
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
     user_msg = build_llm_prompt(user_query, candidates)
-    # Build history for Gemini chat
-    chat_history = []
-    if history:
-        for msg in history[-20:]:
-            role = "user" if msg.get("role") == "user" else "model"
-            chat_history.append({"role": role, "parts": [msg.get("content", "")]})
     full_prompt = f"{system}\n\n{user_msg}"
-    model = get_gemini()
-    chat = model.start_chat(history=chat_history)
     try:
-        response = chat.send_message(
-            full_prompt,
-            generation_config=genai.types.GenerationConfig(temperature=0.3, max_output_tokens=4096),
-        )
-        text = (response.text or "").strip()
+        text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=4096)
+        text = (text or "").strip()
     except Exception as exc:
         log.warning("Gemini/Gemma generation failed, falling back to deterministic response: %s", exc)
         return _basic_jobmatch_markdown(
@@ -1684,7 +1689,7 @@ Resume text:
     try:
         raw = await gemini_generate_async(
             prompt,
-            genai.types.GenerationConfig(temperature=0, max_output_tokens=500),
+            {"temperature": 0, "maxOutputTokens": 500},
         )
     except Exception as exc:
         log.exception("parse_resume LLM call failed")
@@ -1804,7 +1809,7 @@ Formatting requirements:
 
     raw = await gemini_generate_async(
         prompt,
-        genai.types.GenerationConfig(temperature=0.7, max_output_tokens=600),
+        {"temperature": 0.7, "maxOutputTokens": 600},
     )
     return {"cover_letter": raw.strip()}
 
@@ -2109,7 +2114,7 @@ Produce 5-8 suggestions ordered by priority (high first). Detect the likely indu
 
     raw = await gemini_generate_async(
         f"{system_prompt}\n\n{user_prompt}",
-        genai.types.GenerationConfig(temperature=0.3, max_output_tokens=2000),
+        {"temperature": 0.3, "maxOutputTokens": 2000},
     )
 
     result = _parse_model_json_or_default(
@@ -2185,7 +2190,7 @@ CANDIDATE RESUME:
 
     raw = await gemini_generate_async(
         f"{system_prompt}\n\n{user_prompt}",
-        genai.types.GenerationConfig(temperature=0.3, max_output_tokens=2000),
+        {"temperature": 0.3, "maxOutputTokens": 2000},
     )
 
     result = _parse_model_json_or_default(
@@ -2248,7 +2253,7 @@ RESUME TEXT:
 
     raw = await gemini_generate_async(
         f"{system_prompt}\n\n{user_prompt}",
-        genai.types.GenerationConfig(temperature=0.1, max_output_tokens=800),
+        {"temperature": 0.1, "maxOutputTokens": 800},
     )
 
     return _parse_model_json_or_default(
@@ -2326,7 +2331,7 @@ CANDIDATE RESUME TEXT
     try:
         raw_email = await gemini_generate_async(
             f"{system_prompt}\n\n{user_prompt}",
-            genai.types.GenerationConfig(temperature=0.35, max_output_tokens=2200),
+            {"temperature": 0.35, "maxOutputTokens": 2200},
         )
         parsed = _parse_model_json_or_default(raw_email, {}, "compose_recruiter_email")
         subject = _safe_str(parsed.get("subject", subject)) or subject
