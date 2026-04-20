@@ -491,11 +491,13 @@ class UserProfile(BaseModel):
     benefits: list[str] = []
     workAuth: str = "Not Specified"
     additional: str = ""
+    resumeText: str = ""  # full raw CV text for richer matching
 
 class WebhookRequest(BaseModel):
     chatInput: Optional[str] = None
     profile: Optional[UserProfile] = None
     sessionId: Optional[str] = None
+    resumeText: str = ""  # fallback if not nested in profile
 
 class WebhookResponse(BaseModel):
     output: str
@@ -575,13 +577,14 @@ class RecruiterEmailComposeRequest(BaseModel):
 
 # ─── Profile query builder ────────────────────────────
 def build_query_from_profile(profile: UserProfile) -> str:
+    """Build a rich semantic query from the full profile including CV text."""
     parts = []
     if profile.desiredRole:
-        parts.append(f"Role: {profile.desiredRole}")
+        parts.append(f"Desired Role: {profile.desiredRole}")
     if profile.skills:
-        parts.append(f"Skills: {', '.join(profile.skills[:12])}")
+        parts.append(f"Technical Skills: {', '.join(profile.skills[:20])}")
     if profile.experience:
-        parts.append(f"Experience: {profile.experience} years")
+        parts.append(f"Years of Experience: {profile.experience}")
     if profile.education:
         parts.append(f"Education: {profile.education}")
     if profile.industry:
@@ -591,10 +594,20 @@ def build_query_from_profile(profile: UserProfile) -> str:
     if profile.workType and profile.workType != "Any":
         parts.append(f"Work Type: {profile.workType}")
     if profile.salaryMin:
-        parts.append(f"Salary Minimum: ${profile.salaryMin:,} per year")
+        parts.append(f"Minimum Salary: {profile.salaryMin}")
+    if profile.companySize and profile.companySize != "Any":
+        parts.append(f"Company Size: {profile.companySize}")
+    if profile.workAuth and profile.workAuth != "Not Specified":
+        parts.append(f"Work Authorization: {profile.workAuth}")
+    if profile.benefits:
+        parts.append(f"Benefits: {', '.join(profile.benefits[:5])}")
     if profile.additional:
-        parts.append(f"Preferences: {profile.additional}")
-    return " | ".join(parts) if parts else "job recommendations"
+        parts.append(f"Additional Preferences: {profile.additional}")
+    # Append CV excerpt for richer semantic embedding
+    if profile.resumeText:
+        cv_excerpt = profile.resumeText.strip()[:800]
+        parts.append(f"Resume Summary: {cv_excerpt}")
+    return "\n".join(parts) if parts else "job recommendations"
 
 # ─── Data cleaning utilities ──────────────────────────
 def _safe_str(val) -> str:
@@ -1422,13 +1435,13 @@ STRICT RULES:
 - Output plain markdown only — no XML tags, no JSON
 """.strip()
 
-def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
+def build_llm_prompt(user_query: str, candidates: list[dict], resume_text: str = "") -> str:
     candidate_text = ""
     for i, c in enumerate(candidates, 1):
         skills = ", ".join(c.get("skills", [])[:12])
         benefits = ", ".join(c.get("benefits", [])[:5])
         candidate_text += (
-            f"[Candidate {i}] (semantic similarity: {c['score']})\n"
+            f"[Candidate {i}] (similarity: {c['score']:.3f}, rerank position: {c.get('rerank_position', i)})\n"
             f"Title: {c.get('title', '')} | Role: {c.get('role', '')}\n"
             f"Company: {c.get('company', '')} | Sector: {c.get('sector', '')} | Industry: {c.get('industry', '')}\n"
             f"Location: {c.get('location', '')}, {c.get('country', '')} | Work Type: {c.get('work_type', '')}\n"
@@ -1441,9 +1454,12 @@ def build_llm_prompt(user_query: str, candidates: list[dict]) -> str:
             f"Responsibilities: {c.get('responsibilities', '')[:200]}\n"
             "---\n"
         )
+    cv_section = ""
+    if resume_text:
+        cv_section = f"\nCANDIDATE'S FULL CV EXCERPT (use this for detailed matching):\n{resume_text[:1200]}\n"
     return (
-        f"USER PROFILE & JOB REQUEST:\n{user_query}\n\n"
-        f"CANDIDATE JOB POSTINGS ({len(candidates)} retrieved by semantic search):\n"
+        f"USER PROFILE & JOB REQUEST:\n{user_query}\n{cv_section}\n"
+        f"CANDIDATE JOB POSTINGS ({len(candidates)} retrieved by semantic search, already reranked):\n"
         f"{candidate_text}\n"
         f"Select the top {TOP_N_RESULTS} best matches for this user and respond in the required Markdown format."
     )
@@ -1490,6 +1506,63 @@ def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
     return "\n".join(lines)
 
 
+def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") -> list[dict]:
+    """
+    Score-boost reranking: augments Pinecone cosine similarity with keyword
+    signals from the full profile (skills, role, industry, education, CV text)
+    so the top-10 passed to Gemma are truly the best matches.
+    """
+    if not profile or not candidates:
+        return candidates
+
+    # Build a set of normalised profile tokens to match against
+    profile_tokens: set[str] = set()
+    for skill in (profile.skills or []):
+        profile_tokens.add(skill.lower().strip())
+    for word in re.split(r"[\s,|/]+", (profile.desiredRole or "") + " " + (profile.industry or "") + " " + (profile.education or "")):
+        w = word.lower().strip()
+        if len(w) > 2:
+            profile_tokens.add(w)
+    # Add significant words from CV text
+    if profile.resumeText:
+        for word in re.split(r"\W+", profile.resumeText[:2000].lower()):
+            if len(word) > 3:
+                profile_tokens.add(word)
+
+    def _boost(c: dict) -> float:
+        base = float(c.get("score") or 0)
+        if not profile_tokens:
+            return base
+        # Check job fields for token overlap
+        job_text = " ".join([
+            c.get("title", ""), c.get("role", ""), c.get("description", ""),
+            c.get("sector", ""), c.get("industry", ""),
+            " ".join(c.get("skills", [])),
+        ]).lower()
+        job_tokens = set(re.split(r"\W+", job_text))
+        overlap = len(profile_tokens & job_tokens)
+        # Small additive boost (max ~0.15) so cosine score still dominates
+        boost = min(overlap * 0.005, 0.15)
+        # Experience alignment boost
+        if profile.experience:
+            exp_req = _safe_str(c.get("experience", ""))
+            exp_nums = re.findall(r"\d+", exp_req)
+            if exp_nums:
+                req_years = int(exp_nums[0])
+                diff = abs(profile.experience - req_years)
+                if diff <= 1:
+                    boost += 0.05
+                elif diff <= 3:
+                    boost += 0.02
+        return base + boost
+
+    reranked = sorted(candidates, key=_boost, reverse=True)
+    # Re-assign scores so Gemma sees the reranked order
+    for i, c in enumerate(reranked):
+        c["rerank_position"] = i + 1
+    return reranked
+
+
 def _is_renderable_jobmatch_output(text: str) -> bool:
     if not text:
         return False
@@ -1499,12 +1572,12 @@ def _is_renderable_jobmatch_output(text: str) -> bool:
     return has_heading or has_job_blocks
 
 
-def generate_response(user_query: str, candidates: list[dict], history: list = None) -> str:
+def generate_response(user_query: str, candidates: list[dict], history: list = None, resume_text: str = "") -> str:
     if not GOOGLE_API_KEY or not _GENAI_AVAILABLE:
         return _basic_jobmatch_markdown(candidates)
 
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
-    user_msg = build_llm_prompt(user_query, candidates[:10])  # cap at 10 to keep prompt short
+    user_msg = build_llm_prompt(user_query, candidates[:10], resume_text=resume_text)  # cap at 10 to keep prompt short
     full_prompt = f"{system}\n\n{user_msg}"
     try:
         text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=1500)
@@ -1565,7 +1638,10 @@ async def webhook(request: Request):
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail=exc.errors())
 
+    # Merge resumeText from top-level field into profile if not already set
     if req.profile:
+        if req.resumeText and not req.profile.resumeText:
+            req.profile.resumeText = req.resumeText
         query = build_query_from_profile(req.profile)
     elif req.chatInput and req.chatInput.strip():
         query = req.chatInput.strip()
@@ -1582,9 +1658,16 @@ async def webhook(request: Request):
         raise HTTPException(status_code=503, detail=f"Search unavailable: {exc}")
     if not candidates:
         return WebhookResponse(output="No matching jobs found. Please try different search terms.")
+
+    # Rerank candidates using profile signals before sending to Gemma
+    profile_for_rerank = req.profile if req.profile else None
+    candidates = _rerank_candidates(candidates, profile_for_rerank)
+    log.info("[%s] Reranked %d candidates; top: %s", request_id, len(candidates), candidates[0].get("title", "") if candidates else "none")
+
     try:
         # Run blocking Gemma call in a thread so the async event loop stays healthy
-        output = await asyncio.to_thread(generate_response, query, candidates, history)
+        resume_text = (req.profile.resumeText if req.profile else None) or req.resumeText or ""
+        output = await asyncio.to_thread(generate_response, query, candidates, history, resume_text)
     except Exception as exc:
         log.exception("LLM generation failed")
         raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
@@ -2550,7 +2633,7 @@ def _get_browse_jobs() -> list[dict]:
     return jobs
 
 
-@app.get("/jobs/browse", dependencies=[Depends(verify_api_key)])
+@app.get("/jobs/browse")
 @limiter.limit("30/minute")
 async def browse_jobs(
     request: Request,

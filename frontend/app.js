@@ -656,7 +656,7 @@ async function sendToBackend(profile) {
     res = await fetchWithRetry(CONFIG.API_BASE_URL + '/webhook', {
       method: 'POST',
       headers,
-      body: JSON.stringify({ profile, sessionId: currentSessionId }),
+      body: JSON.stringify({ profile, sessionId: currentSessionId, resumeText: lastResumeText || '' }),
       signal: controller.signal,
     });
   } catch (networkErr) {
@@ -2681,14 +2681,17 @@ async function fetchAndRenderBrowseJobs() {
   if (browseState.industry) params.set('industry', browseState.industry);
 
   try {
-    const token = AUTH.getToken();
-    const getHeaders = {};
-    if (token) getHeaders['Authorization'] = `Bearer ${token}`;
-    if (CONFIG.API_KEY) getHeaders['X-Api-Key'] = CONFIG.API_KEY;
+    const getHeaders = authHeaders();
     const res = await fetch(`${CONFIG.API_BASE_URL}/jobs/browse?${params}`, {
       headers: getHeaders,
     });
-    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      if (res.status === 401) {
+        handleAuthFailure('Session expired. Please sign in again to browse jobs.');
+      }
+      throw new Error(payload.detail || `Server error ${res.status}`);
+    }
     const data = await res.json();
 
     loadingEl?.classList.add('hidden');
