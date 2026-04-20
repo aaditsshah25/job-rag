@@ -850,17 +850,23 @@ def _verify_google_credential(credential: str) -> dict:
             log.error("google-auth token verification failed: %s", _google_auth_err)
             raise HTTPException(status_code=401, detail="Invalid Google credential")
 
+    # Fallback: verify ID token via Google's tokeninfo endpoint (no SDK needed)
     try:
-        request = UrlRequest(
-            "https://www.googleapis.com/oauth2/v3/userinfo",
-            headers={"Authorization": f"Bearer {credential}"},
+        resp = _httpx.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"id_token": credential},
+            timeout=10,
         )
-        with urlopen(request, timeout=10) as response:
-            token_payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(token_payload, dict):
-            raise ValueError("Invalid Google userinfo payload")
+        if resp.status_code != 200:
+            raise ValueError(f"tokeninfo returned {resp.status_code}: {resp.text}")
+        token_payload = resp.json()
+        if not isinstance(token_payload, dict) or "email" not in token_payload:
+            raise ValueError("Invalid tokeninfo payload")
+        if GOOGLE_CLIENT_ID_VALID and token_payload.get("aud") != GOOGLE_CLIENT_ID:
+            raise ValueError("Token audience mismatch")
         return token_payload
-    except (HTTPError, URLError, ValueError, json.JSONDecodeError):
+    except (ValueError, Exception) as _err:
+        log.error("tokeninfo verification failed: %s", _err)
         raise HTTPException(status_code=401, detail="Invalid Google credential")
 
 def clean_row(row) -> dict:
