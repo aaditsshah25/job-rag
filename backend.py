@@ -122,7 +122,12 @@ CSV_PATH          = os.getenv(
     "CSV_PATH",
     os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
 )
-DB_PATH           = os.getenv("DB_PATH", "./data/jobmatch.db")
+_default_db_path = (
+    "/tmp/jobmatch.db"
+    if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME") or not os.access(".", os.W_OK)
+    else "./data/jobmatch.db"
+)
+DB_PATH           = os.getenv("DB_PATH", _default_db_path)
 JOBMATCH_API_KEY  = os.getenv("JOBMATCH_API_KEY", "")
 RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
@@ -346,7 +351,9 @@ async def _ensure_table_columns():
 
 # ─── Database init ────────────────────────────────────
 async def init_db():
-    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+    db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+    if db_dir and db_dir != "/tmp":
+        os.makedirs(db_dir, exist_ok=True)
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS bookmarks (
@@ -422,7 +429,10 @@ async def init_db():
 # ─── Lifespan ─────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await init_db()
+    try:
+        await init_db()
+    except Exception as e:
+        log.error("DB init failed (non-fatal): %s", e)
     if OPENAI_API_KEY and PINECONE_API_KEY:
         try:
             index_dataset(force=False)
@@ -977,11 +987,13 @@ def index_dataset(force: bool = False) -> int:
     mode = INDEX_MODE if INDEX_MODE in {"csv_only", "live_only", "hybrid"} else "hybrid"
     jobs: list[dict] = []
 
-    if mode in {"csv_only", "hybrid"}:
+    if mode in {"csv_only", "hybrid"} and _PANDAS_AVAILABLE:
         log.info("Loading dataset from %s ...", CSV_PATH)
         df = pd.read_csv(CSV_PATH)
         log.info("Loaded %d CSV rows.", len(df))
         jobs.extend(clean_row(df.iloc[i]) for i in range(len(df)))
+    elif mode in {"csv_only", "hybrid"}:
+        log.warning("Pandas not available; skipping CSV index load.")
 
     source_cfg = get_source_config()
     source_counts: dict[str, int] = {}
@@ -2460,6 +2472,8 @@ def _fetch_all_jobs_from_pinecone() -> list[dict]:
 
 def _load_adzuna_csv() -> list[dict]:
     """Load the Adzuna live jobs CSV which has pre-normalised column names."""
+    if not _PANDAS_AVAILABLE:
+        return []
     adzuna_path = os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
     if not os.path.isfile(adzuna_path):
         return []
