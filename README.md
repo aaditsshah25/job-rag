@@ -1,6 +1,6 @@
 # JobMatch AI - RAG Assignment
 
-AI-powered job matching using FastAPI, Pinecone, and OpenAI models.
+AI-powered job matching using FastAPI, Pinecone, and Gemma models.
 
 Detailed architecture documentation: see `ARCHITECTURE.md`.
 
@@ -14,9 +14,12 @@ cp .env.example .env
 ```
 
 2. Fill required keys in `.env`:
-- `OPENAI_API_KEY`
+- `GOOGLE_API_KEY`
 - `PINECONE_API_KEY`
 - `JOBMATCH_API_KEY` (recommended)
+- Optional: `GEMMA_CHAT_MODEL` (defaults to `gemma-3-27b-it`)
+
+Gemma-only mode is enforced. Non-Gemma model names are ignored.
 
 3. Start backend:
 
@@ -97,7 +100,7 @@ Reference setup details: `SOURCES.md`.
 
 | Issue | Fix |
 |---|---|
-| `OPENAI_API_KEY is not set` | Add key to `.env` |
+| `GOOGLE_API_KEY is not set` | Add key to `.env` |
 | Empty matches | Force re-index with `POST /index?force=true` |
 | Frontend cannot reach backend | Check `frontend/config.js` base URL |
 | Port 8000 busy | Use another port and update frontend API base URL |

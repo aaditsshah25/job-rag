@@ -23,11 +23,13 @@ GitHub (aaditsshah25/job-rag)
 ### Backend (Railway)
 | Variable | Description | Example |
 |---|---|---|
-| `OPENAI_API_KEY` | OpenAI API key | `sk-...` |
+| `GOOGLE_API_KEY` | Google API key for Gemma calls | `AIza...` |
+| `GEMMA_CHAT_MODEL` | Gemma model name (Gemma-only) | `gemma-3-27b-it` |
 | `PINECONE_API_KEY` | Pinecone API key | `...` |
 | `PINECONE_INDEX` | Pinecone index name | `job-listings1` |
 | `PINECONE_CLOUD` | Pinecone cloud | `aws` |
 | `PINECONE_REGION` | Pinecone region | `us-east-1` |
+| `VECTOR_DIM` | Local hash vector dimension | `1536` |
 | `JOBMATCH_API_KEY` | Shared secret for frontend→backend auth | any random string |
 | `JWT_SECRET` | JWT signing secret | any random string |
 | `ALLOWED_ORIGINS` | CORS allowed origins (comma-separated) | see below |
