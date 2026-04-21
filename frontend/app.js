@@ -1834,16 +1834,14 @@ function renderJobCard(job, rank) {
     Details
   </button>`;
 
-  // Tailor Resume button (only shown if resume was uploaded)
-  if (lastResumeText) {
-    html += `<button class="card-tailor-btn" title="Tailor your resume for this job"
-      data-tailor-title="${esc(jobTitle)}"
-      data-tailor-company="${esc(company)}"
-      data-tailor-desc="${esc(jobDescription.trim().slice(0, 500))}"
-      data-tailor-skills="${esc(reasons.slice(0, 8).join('|'))}">
-      Tailor Resume
-    </button>`;
-  }
+  // Tailor Resume button (always shown)
+  html += `<button class="card-tailor-btn" title="Tailor your resume for this job"
+    data-tailor-title="${esc(jobTitle)}"
+    data-tailor-company="${esc(company)}"
+    data-tailor-desc="${esc(jobDescription.trim().slice(0, 500))}"
+    data-tailor-skills="${esc(reasons.slice(0, 8).join('|'))}">
+    Tailor Resume
+  </button>`;
 
   // Bookmark button
   html += `<button class="card-bookmark-btn ${isBookmarked ? 'bookmarked' : ''}" title="Bookmark this job"
@@ -2259,7 +2257,10 @@ tailorResumeModal?.addEventListener('click', (e) => {
 });
 
 async function tailorResume(jobTitle, company, jobDesc, jobSkills) {
-  if (!lastResumeText) return;
+  if (!lastResumeText) {
+    showToast('Please upload your resume first before tailoring.');
+    return;
+  }
 
   const titleEl = document.getElementById('tailorModalTitle');
   if (titleEl) titleEl.textContent = `Tailoring Resume for ${jobTitle} @ ${company}`;
