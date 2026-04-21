@@ -1,6 +1,6 @@
 """
 JobMatch AI — Python Backend v2.0.0
-RAG pipeline: CSV → Pinecone (embeddings) → Gemma 4 (ranking & response)
+RAG pipeline: CSV → Pinecone (local hash vectors) → Gemma (ranking & response)
 
 Endpoints:
   POST /webhook          — accepts {profile, sessionId} or {chatInput, sessionId}
@@ -47,7 +47,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
-from openai import OpenAI
 import httpx as _httpx
 genai = None  # SDK not used; we call Gemini via REST
 _GENAI_AVAILABLE = True  # always available via HTTP
@@ -103,19 +102,22 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────
-OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY    = os.getenv("GOOGLE_API_KEY", "")
 PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY", "")
 PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
-EMBED_MODEL       = "text-embedding-3-small"
-CHAT_MODEL        = (
-    os.getenv("GEMMA_CHAT_MODEL", "").strip()
-    or os.getenv("GOOGLE_CHAT_MODEL", "").strip()
-    or os.getenv("OPENAI_CHAT_MODEL", "").strip()
-    or "gemma-3-27b-it"
-)
+VECTOR_DIM        = int(os.getenv("VECTOR_DIM", "1536"))
+EMBEDDING_PROVIDER = "local_hash_v1"
+_DEFAULT_GEMMA_MODEL = "gemma-3-27b-it"
+_configured_chat_model = os.getenv("GEMMA_CHAT_MODEL", _DEFAULT_GEMMA_MODEL).strip() or _DEFAULT_GEMMA_MODEL
+CHAT_MODEL        = _configured_chat_model if _configured_chat_model.lower().startswith("gemma-") else _DEFAULT_GEMMA_MODEL
+if CHAT_MODEL != _configured_chat_model:
+    log.warning(
+        "Ignoring non-Gemma GEMMA_CHAT_MODEL '%s'; forcing '%s'.",
+        _configured_chat_model,
+        CHAT_MODEL,
+    )
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
@@ -161,23 +163,20 @@ JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
 # Warn if a non-existent model is configured
-_KNOWN_GEMINI_MODELS = {
+_KNOWN_GEMMA_MODELS = {
     "gemma-3-27b-it", "gemma-3-12b-it", "gemma-3-4b-it", "gemma-3-1b-it",
     "gemma-4-31b-it", "gemma-4-26b-a4b-it",
-    "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash",
 }
 # Gemma 4 models use a reasoning/thinking mode — output is extracted after the marker
 _GEMMA4_MODELS = {"gemma-4-31b-it", "gemma-4-26b-a4b-it"}
-if CHAT_MODEL not in _KNOWN_GEMINI_MODELS:
+if CHAT_MODEL not in _KNOWN_GEMMA_MODELS:
     log.warning(
-        "CHAT_MODEL '%s' is not in the known-good list. If requests fail, set GEMMA_CHAT_MODEL=gemma-3-27b-it in your env.",
+        "GEMMA_CHAT_MODEL '%s' is not in the tested Gemma list. Continuing in Gemma-only mode.",
         CHAT_MODEL,
     )
-log.info("Using LLM model: %s", CHAT_MODEL)
+log.info("Gemma-only mode enabled. Using model: %s", CHAT_MODEL)
 
 # ─── Lazy singletons ──────────────────────────────────
-_openai_client = None
-_gemini_model = None
 _pc = None
 _last_source_stats: dict[str, object] = {
     "last_indexed_at": None,
@@ -187,20 +186,6 @@ _last_source_stats: dict[str, object] = {
     "source_counts": {},
     "external_total": 0,
 }
-
-def get_openai() -> OpenAI:
-    global _openai_client
-    if _openai_client is None:
-        if not OPENAI_API_KEY:
-            raise RuntimeError("OPENAI_API_KEY is not set.")
-        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    return _openai_client
-
-def get_gemini():
-    """No-op — Gemini is called via HTTP, not SDK. Kept for compat."""
-    if not GOOGLE_API_KEY:
-        raise RuntimeError("GOOGLE_API_KEY is not set.")
-    return None  # sentinel: use _gemini_http_generate instead
 
 def _gemini_http_generate(prompt: str, temperature: float = 0.3, max_tokens: int = 4096) -> str:
     """Call Gemini/Gemma via REST API (no SDK required)."""
@@ -218,7 +203,7 @@ def _gemini_http_generate(prompt: str, temperature: float = 0.3, max_tokens: int
     data = resp.json()
     candidates = data.get("candidates", [])
     if not candidates:
-        raise RuntimeError(f"Gemini returned no candidates: {data}")
+        raise RuntimeError(f"Gemma API returned no candidates: {data}")
     parts = candidates[0].get("content", {}).get("parts", [])
     return "".join(p.get("text", "") for p in parts)
 
@@ -453,7 +438,7 @@ async def lifespan(app: FastAPI):
         await init_db()
     except Exception as e:
         log.error("DB init failed (non-fatal): %s", e)
-    if OPENAI_API_KEY and PINECONE_API_KEY:
+    if PINECONE_API_KEY:
         try:
             force_reindex = _env_flag("FORCE_REINDEX", default=False)
             index_dataset(force=force_reindex)
@@ -692,7 +677,7 @@ _SKILL_KEYWORDS = [
     "ci/cd", "jenkins", "github actions", "linux", "microservices", "kafka", "rabbitmq",
     # Other
     "git", "agile", "scrum", "jira", "confluence", "salesforce", "sap",
-    "llm", "generative ai", "langchain", "openai", "vector database", "pinecone",
+    "llm", "generative ai", "langchain", "vector database", "pinecone",
 ]
 
 def _extract_skills_from_text(text: str) -> list[str]:
@@ -1199,51 +1184,84 @@ def _stable_job_vector_id(job: dict, fallback_idx: int) -> str:
     short_hash = hashlib.md5(raw.encode("utf-8")).hexdigest()[:16]
     return f"job_{short_hash}_{fallback_idx}"
 
+
+def _tokenize_for_embedding(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9+#.]{2,}", (text or "").lower())
+
+
+def _hash_embed_text(text: str, dim: int = VECTOR_DIM) -> list[float]:
+    tokens = _tokenize_for_embedding(text)
+    if not tokens:
+        return [0.0] * dim
+
+    vec = [0.0] * dim
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        idx_a = int.from_bytes(digest[0:4], "big") % dim
+        idx_b = int.from_bytes(digest[4:8], "big") % dim
+        sign = -1.0 if digest[8] % 2 else 1.0
+        weight = 1.0 + min(len(token), 12) / 12.0
+        vec[idx_a] += sign * weight
+        vec[idx_b] += sign * 0.5
+
+    norm = math.sqrt(sum(v * v for v in vec))
+    if norm > 0:
+        return [v / norm for v in vec]
+    return vec
+
+
+def _read_index_embedding_provider(index) -> str:
+    try:
+        for id_page in index.list(limit=1):
+            if not isinstance(id_page, list) or not id_page:
+                break
+            fetch_resp = index.fetch(ids=[id_page[0]])
+            vectors = fetch_resp.vectors if hasattr(fetch_resp, "vectors") else {}
+            for _, vec in vectors.items():
+                metadata = getattr(vec, "metadata", {}) or {}
+                if isinstance(metadata, dict):
+                    return _safe_str(metadata.get("embedding_provider"))
+            break
+    except Exception as exc:
+        log.warning("Could not inspect index embedding provider: %s", exc)
+    return ""
+
 def get_or_create_index():
     client = get_pinecone()
     existing = [idx.name for idx in client.list_indexes()]
     if PINECONE_INDEX not in existing:
         client.create_index(
             name=PINECONE_INDEX,
-            dimension=1536,
+            dimension=VECTOR_DIM,
             metric="cosine",
             spec=ServerlessSpec(cloud=PINECONE_CLOUD, region=PINECONE_REGION),
         )
     return client.Index(PINECONE_INDEX)
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    # Retry transient provider errors (timeouts/rate limits) to keep indexing resilient.
-    max_attempts = 3
-    last_error = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            resp = get_openai().embeddings.create(model=EMBED_MODEL, input=texts)
-            return [r.embedding for r in resp.data]
-        except Exception as exc:
-            last_error = exc
-            if attempt >= max_attempts:
-                break
-            backoff_seconds = 1.5 ** attempt
-            log.warning(
-                "Embedding request failed (attempt %d/%d): %s; retrying in %.1fs",
-                attempt,
-                max_attempts,
-                exc,
-                backoff_seconds,
-            )
-            time.sleep(backoff_seconds)
-    raise RuntimeError(f"Embedding failed after {max_attempts} attempts: {last_error}")
+    return [_hash_embed_text(text) for text in texts]
 
 def index_dataset(force: bool = False) -> int:
     global _last_source_stats
     index = get_or_create_index()
-    if not force:
-        stats = index.describe_index_stats()
-        if stats.total_vector_count > 0:
-            log.info("Index already has %d vectors; skipping re-index.", stats.total_vector_count)
+    stats = index.describe_index_stats()
+    if not force and stats.total_vector_count > 0:
+        existing_provider = _read_index_embedding_provider(index)
+        if existing_provider == EMBEDDING_PROVIDER:
+            log.info(
+                "Index already has %d vectors with provider %s; skipping re-index.",
+                stats.total_vector_count,
+                EMBEDDING_PROVIDER,
+            )
             return stats.total_vector_count
+        log.warning(
+            "Index vectors were built with provider '%s' (expected '%s'); re-indexing.",
+            existing_provider or "unknown",
+            EMBEDDING_PROVIDER,
+        )
+        force = True
 
-    if force:
+    if force and stats.total_vector_count > 0:
         log.info("Force re-index: deleting all existing vectors...")
         index.delete(delete_all=True)
         log.info("Index cleared.")
@@ -1312,6 +1330,7 @@ def index_dataset(force: bool = False) -> int:
                 "skills": job["skills"][:20], "benefits": job["benefits"][:10],
                 "description": job["description"][:500], "responsibilities": job["responsibilities"][:300],
                 "sector": job["sector"], "industry": job["industry"], "company_size": job["company_size"],
+                "embedding_provider": EMBEDDING_PROVIDER,
                 "source": job.get("source", "local_csv"), "external_url": job.get("external_url", ""),
             }
             vectors.append({"id": vid, "values": emb, "metadata": meta})
@@ -1566,8 +1585,8 @@ def _normalize_pinecone_match(match) -> dict:
     return normalized
 
 def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
-    if not OPENAI_API_KEY or not PINECONE_API_KEY:
-        log.warning("Vector credentials missing; using local CSV fallback search")
+    if not PINECONE_API_KEY:
+        log.warning("PINECONE_API_KEY is missing; using local CSV fallback search")
         return _search_jobs_local_csv(query, top_k=top_k)
 
     try:
@@ -1848,7 +1867,13 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": "2.0.0", "chat_model": CHAT_MODEL}
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "chat_model": CHAT_MODEL,
+        "gemma_only": True,
+        "embedding_provider": EMBEDDING_PROVIDER,
+    }
 
 
 @app.get("/auth/config")
@@ -2426,9 +2451,9 @@ async def send_results(req: SendResultsRequest):
             "text": f"Hi {recipient_name},\n\nHere are your job matches:\n\n{results_markdown}",
         })
         return {"status": "sent", "to": recipient, "provider": status["provider"]}
-    except Exception:
+    except Exception as exc:
         log.exception("Email send failed")
-        raise HTTPException(status_code=500, detail="Email delivery failed. Please try again.")
+        raise HTTPException(status_code=500, detail=f"Email delivery failed: {exc}")
 
 
 @app.post("/send-cover-letter", dependencies=[Depends(verify_api_key)])
@@ -2498,9 +2523,9 @@ async def send_cover_letter(req: SendCoverLetterRequest):
             "provider": status["provider"],
             "message_id": message_id,
         }
-    except Exception:
+    except Exception as exc:
         log.exception("Cover letter email send failed")
-        raise HTTPException(status_code=500, detail="Cover letter email delivery failed. Please try again.")
+        raise HTTPException(status_code=500, detail=f"Cover letter email delivery failed: {exc}")
 
 
 @app.post("/enhance-resume", dependencies=[Depends(verify_api_key)])
