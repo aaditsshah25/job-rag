@@ -8,6 +8,7 @@ Endpoints:
   POST /index            — (re)index the CSV dataset into Pinecone
   POST /parse-resume     — extract structured profile from PDF resume
   POST /cover-letter     — generate a tailored cover letter
+    POST /send-cover-letter — send a generated cover letter via Resend API
   POST /bookmark         — save a bookmarked job
   GET  /bookmarks/{sid}  — retrieve bookmarks for a session
   POST /feedback         — submit job rating/feedback
@@ -131,6 +132,8 @@ DB_PATH           = os.getenv("DB_PATH", _default_db_path)
 JOBMATCH_API_KEY  = os.getenv("JOBMATCH_API_KEY", "")
 RESEND_API_KEY    = os.getenv("RESEND_API_KEY", "")
 FROM_EMAIL        = os.getenv("FROM_EMAIL", "noreply@jobmatchai.dev")
+MAX_EMAIL_RESULTS_CHARS = int(os.getenv("MAX_EMAIL_RESULTS_CHARS", "60000"))
+MAX_COVER_LETTER_EMAIL_CHARS = int(os.getenv("MAX_COVER_LETTER_EMAIL_CHARS", "12000"))
 if _RESEND_AVAILABLE and RESEND_API_KEY:
     resend_lib.api_key = RESEND_API_KEY
 GOOGLE_CLIENT_ID  = os.getenv("GOOGLE_CLIENT_ID", "").strip()
@@ -158,10 +161,16 @@ JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
 
 # Warn if a non-existent model is configured
-_KNOWN_GEMINI_MODELS = {"gemma-3-27b-it", "gemma-3-12b-it", "gemma-3-4b-it", "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash"}
+_KNOWN_GEMINI_MODELS = {
+    "gemma-3-27b-it", "gemma-3-12b-it", "gemma-3-4b-it", "gemma-3-1b-it",
+    "gemma-4-31b-it", "gemma-4-26b-a4b-it",
+    "gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash", "gemini-2.5-flash",
+}
+# Gemma 4 models use a reasoning/thinking mode — output is extracted after the marker
+_GEMMA4_MODELS = {"gemma-4-31b-it", "gemma-4-26b-a4b-it"}
 if CHAT_MODEL not in _KNOWN_GEMINI_MODELS:
     log.warning(
-        "CHAT_MODEL '%s' is not in the known-good list. If requests fail, set GEMMA_CHAT_MODEL=gemini-1.5-flash in your env.",
+        "CHAT_MODEL '%s' is not in the known-good list. If requests fail, set GEMMA_CHAT_MODEL=gemma-3-27b-it in your env.",
         CHAT_MODEL,
     )
 log.info("Using LLM model: %s", CHAT_MODEL)
@@ -202,7 +211,9 @@ def _gemini_http_generate(prompt: str, temperature: float = 0.3, max_tokens: int
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {"temperature": temperature, "maxOutputTokens": max_tokens},
     }
-    resp = _httpx.post(url, params={"key": GOOGLE_API_KEY}, json=payload, timeout=55)
+    # Gemma 4 reasoning models need more time to generate (they think before responding)
+    timeout = 120 if CHAT_MODEL in _GEMMA4_MODELS else 55
+    resp = _httpx.post(url, params={"key": GOOGLE_API_KEY}, json=payload, timeout=timeout)
     resp.raise_for_status()
     data = resp.json()
     candidates = data.get("candidates", [])
@@ -520,16 +531,35 @@ class FeedbackRequest(BaseModel):
     comment: str = ""
 
 class CoverLetterRequest(BaseModel):
-    profile: UserProfile
-    jobTitle: str
-    company: str
+    profile: Optional[UserProfile] = None
+    jobTitle: str = ""
+    company: str = ""
     jobDescription: str = ""
     tone: str = "professional"
+    # Backward-compatible fields for older clients
+    job_title: str = ""
+    company_name: str = ""
+    job_description: str = ""
+    applicant_name: str = ""
+    resume_text: str = ""
+    skills: list[str] = []
+    experience_years: Optional[int] = None
+    education: str = ""
 
 class SendResultsRequest(BaseModel):
     email: str
-    name: str
-    results_markdown: str
+    name: str = "there"
+    results_markdown: str = ""
+    # Backward-compatible payload accepted from older clients
+    results: Optional[object] = None
+
+class SendCoverLetterRequest(BaseModel):
+    recruiter_email: str
+    applicant_name: str = ""
+    applicant_email: str = ""
+    job_title: str = ""
+    company: str = ""
+    cover_letter: str
 
 class GoogleAuthRequest(BaseModel):
     credential: str
@@ -615,18 +645,6 @@ def _safe_str(val) -> str:
     if val is None or (isinstance(val, float) and math.isnan(val)):
         return ""
     return str(val).strip()
-
-def _safe_get(row, key, default=""):
-    """Safely get value from pandas Series or dict."""
-    try:
-        if hasattr(row, "get"):
-            return row.get(key, default)
-        elif key in row:
-            return row[key]
-        else:
-            return default
-    except Exception:
-        return default
 
 def _parse_salary(raw: str) -> str:
     raw = _safe_str(raw)
@@ -861,6 +879,75 @@ def _markdown_to_email_html(markdown: str) -> str:
 
     _flush_list()
     return "\n".join(out)
+
+
+def _markdown_from_results_payload(results_payload: object) -> str:
+    if results_payload is None:
+        return ""
+
+    if isinstance(results_payload, str):
+        return results_payload.strip()
+
+    if isinstance(results_payload, dict):
+        lines = ["## Results"]
+        for key, value in results_payload.items():
+            text = _safe_str(value)
+            if text:
+                lines.append(f"- {key}: {text}")
+        return "\n".join(lines).strip()
+
+    if isinstance(results_payload, list):
+        lines = ["# JobMatch AI Results", ""]
+        for idx, item in enumerate(results_payload, start=1):
+            if isinstance(item, dict):
+                title = _safe_str(item.get("job") or item.get("title") or f"Result {idx}")
+                lines.append(f"### {idx}. {title}")
+                for key, value in item.items():
+                    if key in {"job", "title"}:
+                        continue
+                    text = _safe_str(value)
+                    if text:
+                        lines.append(f"- {key}: {text}")
+                lines.append("")
+            else:
+                text = _safe_str(item)
+                if text:
+                    lines.append(f"- {idx}. {text}")
+        return "\n".join(lines).strip()
+
+    return _safe_str(results_payload)
+
+
+def _sanitize_cover_letter_output(text: str) -> str:
+    cleaned = (text or "").strip()
+    cleaned = re.sub(r"^```(?:[a-zA-Z0-9_-]+)?\s*", "", cleaned)
+    cleaned = re.sub(r"\s*```$", "", cleaned)
+    cleaned = re.sub(r"^(?:here(?:'s| is)?|below is)\s+(?:a\s+)?cover\s+letter[:\s-]*\n", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
+
+
+def _resolve_cover_letter_inputs(req: CoverLetterRequest) -> tuple[UserProfile, str, str, str]:
+    profile = req.profile or UserProfile()
+
+    if not profile.name and req.applicant_name:
+        profile.name = req.applicant_name
+    if not profile.resumeText and req.resume_text:
+        profile.resumeText = req.resume_text
+    if not profile.skills and req.skills:
+        profile.skills = req.skills[:20]
+    if not profile.experience and req.experience_years:
+        profile.experience = max(int(req.experience_years), 0)
+    if not profile.education and req.education:
+        profile.education = req.education
+
+    job_title = _safe_str(req.jobTitle) or _safe_str(req.job_title)
+    company = _safe_str(req.company) or _safe_str(req.company_name)
+    job_description = _safe_str(req.jobDescription) or _safe_str(req.job_description)
+
+    if not profile.desiredRole and job_title:
+        profile.desiredRole = job_title
+
+    return profile, job_title, company, job_description
 
 
 def _strip_model_json(raw: str) -> str:
@@ -1707,11 +1794,13 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
     user_msg = build_llm_prompt(user_query, candidates[:10], resume_text=resume_text)  # cap at 10 to keep prompt short
     full_prompt = f"{system}\n\n{user_msg}"
+    # Gemma 4 uses a reasoning/thinking mode and needs more tokens (thinking + output)
+    max_tokens = 4096 if CHAT_MODEL in _GEMMA4_MODELS else 1500
     try:
-        text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=1500)
+        text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=max_tokens)
         text = (text or "").strip()
     except Exception as exc:
-        log.warning("Gemini/Gemma generation failed, falling back to deterministic response: %s", exc)
+        log.warning("Gemini/Gemma generation failed (%s: %s), falling back to deterministic response", type(exc).__name__, exc)
         return _basic_jobmatch_markdown(
             candidates,
             "AI ranking is temporarily unavailable, so these results use deterministic retrieval ranking.",
@@ -1985,12 +2074,15 @@ Resume text:
 
 @app.post("/cover-letter", dependencies=[Depends(verify_api_key)])
 async def generate_cover_letter(req: CoverLetterRequest):
-    skills_str = ", ".join(req.profile.skills[:10]) if req.profile.skills else "various technical skills"
+    profile, job_title, company, job_description = _resolve_cover_letter_inputs(req)
+    job_title = job_title or profile.desiredRole or "the role"
+    company = company or "your company"
+    skills_str = ", ".join(profile.skills[:10]) if profile.skills else "various technical skills"
+
     if not GOOGLE_API_KEY:
-        applicant = req.profile.name or "the candidate"
-        role = req.jobTitle or "the role"
-        company = req.company or "your company"
-        exp_years = max(req.profile.experience or 0, 0)
+        applicant = profile.name or "the candidate"
+        role = job_title
+        exp_years = max(profile.experience or 0, 0)
         current_hour = datetime.now().hour
         if current_hour < 12:
             greeting = "Good morning"
@@ -1999,7 +2091,7 @@ async def generate_cover_letter(req: CoverLetterRequest):
         else:
             greeting = "Good evening"
 
-        jd_context = " ".join((req.jobDescription or "").split())
+        jd_context = " ".join((job_description or "").split())
         jd_excerpt = jd_context[:240] if jd_context else ""
         role_fit_line = (
             f"I bring {exp_years} years of hands-on experience with strong foundations in {skills_str}."
@@ -2024,15 +2116,20 @@ async def generate_cover_letter(req: CoverLetterRequest):
         )
         return {"cover_letter": body, "mode": "basic"}
 
-    prompt = f"""Write a strong, human cover letter for {req.profile.name or 'the applicant'} applying to the {req.jobTitle} position at {req.company}.
+    resume_context = (profile.resumeText or "").strip()[:1000]
+    if not resume_context:
+        resume_context = "Not provided"
+
+    prompt = f"""Write a strong, human cover letter for {profile.name or 'the applicant'} applying to the {job_title} position at {company}.
 
 Applicant profile:
-- Experience: {req.profile.experience} years
+- Experience: {profile.experience} years
 - Skills: {skills_str}
-- Education: {req.profile.education}
-- Desired role: {req.profile.desiredRole}
+- Education: {profile.education}
+- Desired role: {profile.desiredRole}
 
-Job description context: {req.jobDescription[:500] if req.jobDescription else 'Not provided'}
+Job description context: {job_description[:700] if job_description else 'Not provided'}
+Resume context: {resume_context}
 
 Tone: {req.tone}
 
@@ -2055,7 +2152,7 @@ Formatting requirements:
         prompt,
         {"temperature": 0.7, "maxOutputTokens": 600},
     )
-    return {"cover_letter": raw.strip()}
+    return {"cover_letter": _sanitize_cover_letter_output(raw), "mode": "llm"}
 
 
 @app.post("/bookmark", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
@@ -2272,11 +2369,20 @@ async def send_results(req: SendResultsRequest):
     recipient_name = (req.name or "").strip() or "there"
     if not _is_valid_email(recipient):
         raise HTTPException(status_code=422, detail="Please provide a valid recipient email address")
-    if not (req.results_markdown or "").strip():
+
+    results_markdown = (req.results_markdown or "").strip()
+    if not results_markdown:
+        results_markdown = _markdown_from_results_payload(req.results).strip()
+    if not results_markdown:
         raise HTTPException(status_code=422, detail="No results available to email")
+    if len(results_markdown) > MAX_EMAIL_RESULTS_CHARS:
+        results_markdown = (
+            results_markdown[:MAX_EMAIL_RESULTS_CHARS]
+            + "\n\n[Content truncated for email size limits.]"
+        )
 
     try:
-        html_body = _markdown_to_email_html(req.results_markdown)
+        html_body = _markdown_to_email_html(results_markdown)
         email_html = (
             "<div style='font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#0f172a;'>"
             f"<p>Hi {html.escape(recipient_name)},</p>"
@@ -2289,15 +2395,87 @@ async def send_results(req: SendResultsRequest):
         )
         resend_lib.Emails.send({
             "from": FROM_EMAIL,
-            "to": recipient,
+            "to": [recipient],
             "subject": f"Your JobMatch AI Results \u2014 {recipient_name}",
             "html": email_html,
-            "text": f"Hi {recipient_name},\n\nHere are your job matches:\n\n{req.results_markdown}",
+            "text": f"Hi {recipient_name},\n\nHere are your job matches:\n\n{results_markdown}",
         })
         return {"status": "sent", "to": recipient, "provider": status["provider"]}
     except Exception:
         log.exception("Email send failed")
         raise HTTPException(status_code=500, detail="Email delivery failed. Please try again.")
+
+
+@app.post("/send-cover-letter", dependencies=[Depends(verify_api_key)])
+async def send_cover_letter(req: SendCoverLetterRequest):
+    status = _email_service_status()
+    if not status["configured"]:
+        missing = ", ".join(status["missing"]) if status["missing"] else "unknown configuration"
+        raise HTTPException(status_code=503, detail=f"Email service not configured: {missing}")
+
+    recipient = (req.recruiter_email or "").strip().lower()
+    if not _is_valid_email(recipient):
+        raise HTTPException(status_code=422, detail="Please provide a valid recruiter email address")
+
+    applicant_name = (req.applicant_name or "").strip() or "Candidate"
+    applicant_email = (req.applicant_email or "").strip().lower()
+    job_title = (req.job_title or "").strip() or "the role"
+    company = (req.company or "").strip()
+    cover_letter = _sanitize_cover_letter_output(req.cover_letter)
+
+    if not cover_letter:
+        raise HTTPException(status_code=422, detail="Cover letter body is empty")
+    if len(cover_letter) > MAX_COVER_LETTER_EMAIL_CHARS:
+        cover_letter = (
+            cover_letter[:MAX_COVER_LETTER_EMAIL_CHARS]
+            + "\n\n[Content truncated for email size limits.]"
+        )
+
+    subject = f"Application for {job_title} - {applicant_name}"
+    role_line = f"{job_title} at {company}" if company else job_title
+    intro = f"{applicant_name} asked JobMatch AI to send this cover letter for {role_line}."
+
+    text_body = (
+        f"{intro}\n\n"
+        f"{cover_letter}\n\n"
+        "--\n"
+        "Sent via JobMatch AI"
+    )
+    html_body = (
+        "<div style='font-family:Arial,sans-serif;max-width:760px;margin:0 auto;color:#0f172a;'>"
+        f"<p>{html.escape(intro)}</p>"
+        "<div style='white-space:pre-wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;'>"
+        f"{html.escape(cover_letter)}"
+        "</div>"
+        "<p style='margin-top:18px;'>Sent via JobMatch AI</p>"
+        "</div>"
+    )
+
+    payload = {
+        "from": FROM_EMAIL,
+        "to": [recipient],
+        "subject": subject,
+        "html": html_body,
+        "text": text_body,
+    }
+    if _is_valid_email(applicant_email):
+        payload["reply_to"] = applicant_email
+
+    try:
+        send_response = resend_lib.Emails.send(payload)
+        message_id = ""
+        if isinstance(send_response, dict):
+            nested = send_response.get("data") if isinstance(send_response.get("data"), dict) else {}
+            message_id = _safe_str(send_response.get("id") or nested.get("id"))
+        return {
+            "status": "sent",
+            "to": recipient,
+            "provider": status["provider"],
+            "message_id": message_id,
+        }
+    except Exception:
+        log.exception("Cover letter email send failed")
+        raise HTTPException(status_code=500, detail="Cover letter email delivery failed. Please try again.")
 
 
 @app.post("/enhance-resume", dependencies=[Depends(verify_api_key)])
@@ -2709,81 +2887,56 @@ def _load_adzuna_csv() -> list[dict]:
     adzuna_path = os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
     if not os.path.isfile(adzuna_path):
         return []
-    try:
-        df = pd.read_csv(adzuna_path)
-    except Exception as e:
-        log.error(f"Failed to read Adzuna CSV: {e}")
-        return []
-    
+    df = pd.read_csv(adzuna_path)
     jobs = []
     for i in range(len(df)):
+        row = df.iloc[i]
+        skills_raw = _safe_str(row.get("skills", "[]"))
         try:
-            row = df.iloc[i]
-            skills_raw = _safe_str(_safe_get(row, "skills", "[]"))
-            try:
-                import ast as _ast
-                skills = _ast.literal_eval(skills_raw) if skills_raw.startswith("[") else _parse_skills(skills_raw)
-            except Exception:
-                skills = _parse_skills(skills_raw)
-            jobs.append({
-                "job_id":       str(_safe_get(row, "job_id", "")),
-                "title":        _safe_str(_safe_get(row, "title", "")),
-                "role":         _safe_str(_safe_get(row, "role", "")),
-                "company":      _safe_str(_safe_get(row, "company", "")),
-                "location":     _safe_str(_safe_get(row, "location", "")),
-                "country":      _safe_str(_safe_get(row, "country", "")),
-                "work_type":    _safe_str(_safe_get(row, "work_type", "")),
-                "salary":       _safe_str(_safe_get(row, "salary", "")),
-                "experience":   _safe_str(_safe_get(row, "experience", "")),
-                "description":  _safe_str(_safe_get(row, "description", "")),
-                "skills":       [s for s in skills if isinstance(s, str)],
-                "industry":     _safe_str(_safe_get(row, "industry", "")),
-                "source":       _safe_str(_safe_get(row, "source", "adzuna")),
-                "external_url": _safe_str(_safe_get(row, "external_url", "")),
-                "posting_date": _safe_str(_safe_get(row, "posting_date", "")),
-            })
-        except Exception as e:
-            log.warning(f"Failed to process Adzuna CSV row {i}: {e}")
-            continue
-    
+            import ast as _ast
+            skills = _ast.literal_eval(skills_raw) if skills_raw.startswith("[") else _parse_skills(skills_raw)
+        except Exception:
+            skills = _parse_skills(skills_raw)
+        jobs.append({
+            "job_id":       str(row.get("job_id", "")),
+            "title":        _safe_str(row.get("title", "")),
+            "role":         _safe_str(row.get("role", "")),
+            "company":      _safe_str(row.get("company", "")),
+            "location":     _safe_str(row.get("location", "")),
+            "country":      _safe_str(row.get("country", "")),
+            "work_type":    _safe_str(row.get("work_type", "")),
+            "salary":       _safe_str(row.get("salary", "")),
+            "experience":   _safe_str(row.get("experience", "")),
+            "description":  _safe_str(row.get("description", "")),
+            "skills":       [s for s in skills if isinstance(s, str)],
+            "industry":     _safe_str(row.get("industry", "")),
+            "source":       _safe_str(row.get("source", "adzuna")),
+            "external_url": _safe_str(row.get("external_url", "")),
+            "posting_date": _safe_str(row.get("posting_date", "")),
+        })
     return [j for j in jobs if j["title"]]
 
 
 def _get_browse_jobs() -> list[dict]:
     """Return cached full job list. Loads Adzuna CSV; falls back to main CSV."""
-    try:
-        now = time.time()
-        if _browse_cache["jobs"] and (now - _browse_cache["fetched_at"]) < _BROWSE_CACHE_TTL:
-            return _browse_cache["jobs"]
+    now = time.time()
+    if _browse_cache["jobs"] and (now - _browse_cache["fetched_at"]) < _BROWSE_CACHE_TTL:
+        return _browse_cache["jobs"]
 
-        jobs = _load_adzuna_csv()
-        if not jobs:
-            # Fall back to main dataset CSV
-            try:
-                df = get_csv_df()
-                if df is not None and not df.empty:
-                    jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
-            except Exception as e:
-                log.warning(f"Failed to load main CSV: {e}")
-                
-        if not jobs and PINECONE_API_KEY:
-            # Last resort: fetch all jobs from Pinecone index
-            try:
-                jobs = _fetch_all_jobs_from_pinecone()
-            except Exception as e:
-                log.warning(f"Failed to fetch from Pinecone: {e}")
+    jobs = _load_adzuna_csv()
+    if not jobs:
+        # Fall back to main dataset CSV
+        df = get_csv_df()
+        if df is not None and not df.empty:
+            jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
+    if not jobs and PINECONE_API_KEY:
+        # Last resort: fetch all jobs from Pinecone index
+        jobs = _fetch_all_jobs_from_pinecone()
 
-        _browse_cache["jobs"] = jobs
-        _browse_cache["fetched_at"] = now
-        log.info("browse: cache loaded %d jobs", len(jobs))
-        return jobs
-    except Exception as e:
-        log.error(f"_get_browse_jobs failed: {e}", exc_info=True)
-        # Return cached jobs even if stale, or empty list as fallback
-        if _browse_cache["jobs"]:
-            log.warning("Returning stale cached jobs due to error")
-            return _browse_cache["jobs"]
-        return []
+    _browse_cache["jobs"] = jobs
+    _browse_cache["fetched_at"] = now
+    log.info("browse: cache loaded %d jobs", len(jobs))
+    return jobs
 
 
 @app.get("/jobs/browse")

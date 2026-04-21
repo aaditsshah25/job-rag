@@ -101,6 +101,9 @@ function showAppAfterAuth(user) {
   const nameField = document.getElementById('fullName');
   if (emailField && !emailField.value && user?.email) emailField.value = user.email;
   if (nameField && !nameField.value && user?.name) nameField.value = user.name;
+
+  // Refresh email service state after login so send actions are immediately usable.
+  checkEmailServiceStatus().catch(() => {});
 }
 
 function updateHeaderAccount(user) {
@@ -136,6 +139,17 @@ function signOut() {
   AppState.bookmarks = [];
   AppState.applications = [];
   updateApplicationsBadge();
+  emailServiceReady = false;
+  emailServiceIssue = 'Sign in to check email service status';
+  if (emailResultsBtn) {
+    emailResultsBtn.disabled = true;
+    emailResultsBtn.title = emailServiceIssue;
+  }
+  const sendCoverBtn = document.getElementById('sendCoverLetterBtn');
+  if (sendCoverBtn) {
+    sendCoverBtn.disabled = true;
+    sendCoverBtn.title = emailServiceIssue;
+  }
   setAuthStatus('Signed out. Please sign in with Google to continue.');
 }
 
@@ -470,6 +484,14 @@ function buildResultsEmailMarkdown() {
   return rendered || (resultsContent.innerText || resultsContent.textContent || '').trim();
 }
 
+function updateCoverLetterSendButtonState() {
+  const sendBtn = document.getElementById('sendCoverLetterBtn');
+  if (!sendBtn) return;
+  const ready = emailServiceReady === true;
+  sendBtn.disabled = !ready;
+  sendBtn.title = ready ? '' : `Email unavailable: ${emailServiceIssue || 'configuration missing'}`;
+}
+
 async function checkEmailServiceStatus() {
   if (!AUTH.isAuthenticated()) {
     emailServiceReady = false;
@@ -478,6 +500,7 @@ async function checkEmailServiceStatus() {
       emailResultsBtn.disabled = true;
       emailResultsBtn.title = emailServiceIssue;
     }
+    updateCoverLetterSendButtonState();
     return;
   }
 
@@ -486,6 +509,7 @@ async function checkEmailServiceStatus() {
     const res = await fetch(CONFIG.API_BASE_URL + '/email/status', { method: 'GET', headers });
     if (res.status === 401) {
       handleAuthFailure('Session expired. Please sign in again.');
+      updateCoverLetterSendButtonState();
       return;
     }
     if (!res.ok) {
@@ -495,6 +519,7 @@ async function checkEmailServiceStatus() {
         emailResultsBtn.disabled = true;
         emailResultsBtn.title = emailServiceIssue;
       }
+      updateCoverLetterSendButtonState();
       return;
     }
     const data = await res.json();
@@ -504,6 +529,7 @@ async function checkEmailServiceStatus() {
       emailResultsBtn.disabled = !emailServiceReady;
       emailResultsBtn.title = emailServiceReady ? '' : `Email unavailable: ${emailServiceIssue || 'configuration missing'}`;
     }
+    updateCoverLetterSendButtonState();
   } catch (err) {
     emailServiceReady = false;
     emailServiceIssue = err.message || 'Unknown email service error';
@@ -511,6 +537,7 @@ async function checkEmailServiceStatus() {
       emailResultsBtn.disabled = true;
       emailResultsBtn.title = `Email unavailable: ${emailServiceIssue}`;
     }
+    updateCoverLetterSendButtonState();
   }
 }
 
@@ -1076,11 +1103,17 @@ const jobDetailsLink = document.getElementById('jobDetailsLink');
 const closeJobDetails = document.getElementById('closeJobDetails');
 const closeJobDetailsBtn = document.getElementById('closeJobDetailsBtn');
 const openGmailDraftBtn = document.getElementById('openGmailDraftBtn');
+const sendCoverLetterBtn = document.getElementById('sendCoverLetterBtn');
 
 function openCoverLetterModal(text, recruiterEmail) {
   if (coverLetterContent) coverLetterContent.textContent = text;
   const emailInput = document.getElementById('recruiterEmailInput');
   if (emailInput) emailInput.value = recruiterEmail || '';
+  if (sendCoverLetterBtn) sendCoverLetterBtn.textContent = 'Send Cover Letter';
+  updateCoverLetterSendButtonState();
+  if (emailServiceReady !== true) {
+    checkEmailServiceStatus().catch(() => {});
+  }
   if (coverLetterModal) coverLetterModal.classList.remove('hidden');
 }
 
@@ -1167,6 +1200,84 @@ openGmailDraftBtn?.addEventListener('click', () => {
   if (recruiterEmail) params.set('to', recruiterEmail);
   const gmailUrl = `https://mail.google.com/mail/?${params.toString()}`;
   window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+});
+
+sendCoverLetterBtn?.addEventListener('click', async () => {
+  const body = (coverLetterContent?.textContent || '').trim();
+  if (!body || body.toLowerCase().startsWith('generating cover letter') || body.toLowerCase().startsWith('error:')) {
+    alert('Generate a cover letter first.');
+    return;
+  }
+
+  const recruiterEmailInput = document.getElementById('recruiterEmailInput');
+  const recruiterEmail = (recruiterEmailInput?.value || '').trim().toLowerCase();
+  if (!recruiterEmail) {
+    alert('Please enter the recruiter email before sending.');
+    recruiterEmailInput?.focus();
+    return;
+  }
+  if (!looksLikeEmail(recruiterEmail)) {
+    alert('That recruiter email address looks invalid. Please correct it.');
+    recruiterEmailInput?.focus();
+    return;
+  }
+
+  if (emailServiceReady !== true) {
+    await checkEmailServiceStatus();
+    if (emailServiceReady !== true) {
+      alert(`Email service is not ready. Missing: ${emailServiceIssue || 'configuration'}`);
+      return;
+    }
+  }
+
+  const applicantName = document.getElementById('fullName')?.value?.trim() || 'Candidate';
+  const applicantEmail = document.getElementById('email')?.value?.trim() || '';
+  const jobTitle = currentCoverLetterContext?.jobTitle || 'the role';
+  const company = currentCoverLetterContext?.company || '';
+
+  const headers = AUTH.headers();
+  let sent = false;
+  sendCoverLetterBtn.disabled = true;
+  sendCoverLetterBtn.textContent = 'Sending...';
+
+  try {
+    const res = await fetch(CONFIG.API_BASE_URL + '/send-cover-letter', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        recruiter_email: recruiterEmail,
+        applicant_name: applicantName,
+        applicant_email: applicantEmail,
+        job_title: jobTitle,
+        company,
+        cover_letter: body,
+      }),
+    });
+
+    if (res.status === 401) {
+      handleAuthFailure('Session expired. Please sign in again.');
+      return;
+    }
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `Failed to send cover letter (${res.status})`);
+    }
+
+    sent = true;
+    sendCoverLetterBtn.textContent = 'Sent!';
+    showToast('Cover letter sent successfully');
+    setTimeout(() => {
+      sendCoverLetterBtn.textContent = 'Send Cover Letter';
+      updateCoverLetterSendButtonState();
+    }, 2200);
+  } catch (err) {
+    alert(err.message || 'Could not send cover letter');
+  } finally {
+    if (!sent) {
+      sendCoverLetterBtn.textContent = 'Send Cover Letter';
+      updateCoverLetterSendButtonState();
+    }
+  }
 });
 
 const retrievalDebugModal = document.getElementById('retrievalDebugModal');
