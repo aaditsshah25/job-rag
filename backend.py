@@ -616,6 +616,18 @@ def _safe_str(val) -> str:
         return ""
     return str(val).strip()
 
+def _safe_get(row, key, default=""):
+    """Safely get value from pandas Series or dict."""
+    try:
+        if hasattr(row, "get"):
+            return row.get(key, default)
+        elif key in row:
+            return row[key]
+        else:
+            return default
+    except Exception:
+        return default
+
 def _parse_salary(raw: str) -> str:
     raw = _safe_str(raw)
     if not raw:
@@ -2697,56 +2709,81 @@ def _load_adzuna_csv() -> list[dict]:
     adzuna_path = os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
     if not os.path.isfile(adzuna_path):
         return []
-    df = pd.read_csv(adzuna_path)
+    try:
+        df = pd.read_csv(adzuna_path)
+    except Exception as e:
+        log.error(f"Failed to read Adzuna CSV: {e}")
+        return []
+    
     jobs = []
     for i in range(len(df)):
-        row = df.iloc[i]
-        skills_raw = _safe_str(row.get("skills", "[]"))
         try:
-            import ast as _ast
-            skills = _ast.literal_eval(skills_raw) if skills_raw.startswith("[") else _parse_skills(skills_raw)
-        except Exception:
-            skills = _parse_skills(skills_raw)
-        jobs.append({
-            "job_id":       str(row.get("job_id", "")),
-            "title":        _safe_str(row.get("title", "")),
-            "role":         _safe_str(row.get("role", "")),
-            "company":      _safe_str(row.get("company", "")),
-            "location":     _safe_str(row.get("location", "")),
-            "country":      _safe_str(row.get("country", "")),
-            "work_type":    _safe_str(row.get("work_type", "")),
-            "salary":       _safe_str(row.get("salary", "")),
-            "experience":   _safe_str(row.get("experience", "")),
-            "description":  _safe_str(row.get("description", "")),
-            "skills":       [s for s in skills if isinstance(s, str)],
-            "industry":     _safe_str(row.get("industry", "")),
-            "source":       _safe_str(row.get("source", "adzuna")),
-            "external_url": _safe_str(row.get("external_url", "")),
-            "posting_date": _safe_str(row.get("posting_date", "")),
-        })
+            row = df.iloc[i]
+            skills_raw = _safe_str(_safe_get(row, "skills", "[]"))
+            try:
+                import ast as _ast
+                skills = _ast.literal_eval(skills_raw) if skills_raw.startswith("[") else _parse_skills(skills_raw)
+            except Exception:
+                skills = _parse_skills(skills_raw)
+            jobs.append({
+                "job_id":       str(_safe_get(row, "job_id", "")),
+                "title":        _safe_str(_safe_get(row, "title", "")),
+                "role":         _safe_str(_safe_get(row, "role", "")),
+                "company":      _safe_str(_safe_get(row, "company", "")),
+                "location":     _safe_str(_safe_get(row, "location", "")),
+                "country":      _safe_str(_safe_get(row, "country", "")),
+                "work_type":    _safe_str(_safe_get(row, "work_type", "")),
+                "salary":       _safe_str(_safe_get(row, "salary", "")),
+                "experience":   _safe_str(_safe_get(row, "experience", "")),
+                "description":  _safe_str(_safe_get(row, "description", "")),
+                "skills":       [s for s in skills if isinstance(s, str)],
+                "industry":     _safe_str(_safe_get(row, "industry", "")),
+                "source":       _safe_str(_safe_get(row, "source", "adzuna")),
+                "external_url": _safe_str(_safe_get(row, "external_url", "")),
+                "posting_date": _safe_str(_safe_get(row, "posting_date", "")),
+            })
+        except Exception as e:
+            log.warning(f"Failed to process Adzuna CSV row {i}: {e}")
+            continue
+    
     return [j for j in jobs if j["title"]]
 
 
 def _get_browse_jobs() -> list[dict]:
     """Return cached full job list. Loads Adzuna CSV; falls back to main CSV."""
-    now = time.time()
-    if _browse_cache["jobs"] and (now - _browse_cache["fetched_at"]) < _BROWSE_CACHE_TTL:
-        return _browse_cache["jobs"]
+    try:
+        now = time.time()
+        if _browse_cache["jobs"] and (now - _browse_cache["fetched_at"]) < _BROWSE_CACHE_TTL:
+            return _browse_cache["jobs"]
 
-    jobs = _load_adzuna_csv()
-    if not jobs:
-        # Fall back to main dataset CSV
-        df = get_csv_df()
-        if df is not None and not df.empty:
-            jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
-    if not jobs and PINECONE_API_KEY:
-        # Last resort: fetch all jobs from Pinecone index
-        jobs = _fetch_all_jobs_from_pinecone()
+        jobs = _load_adzuna_csv()
+        if not jobs:
+            # Fall back to main dataset CSV
+            try:
+                df = get_csv_df()
+                if df is not None and not df.empty:
+                    jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
+            except Exception as e:
+                log.warning(f"Failed to load main CSV: {e}")
+                
+        if not jobs and PINECONE_API_KEY:
+            # Last resort: fetch all jobs from Pinecone index
+            try:
+                jobs = _fetch_all_jobs_from_pinecone()
+            except Exception as e:
+                log.warning(f"Failed to fetch from Pinecone: {e}")
 
-    _browse_cache["jobs"] = jobs
-    _browse_cache["fetched_at"] = now
-    log.info("browse: cache loaded %d jobs", len(jobs))
-    return jobs
+        _browse_cache["jobs"] = jobs
+        _browse_cache["fetched_at"] = now
+        log.info("browse: cache loaded %d jobs", len(jobs))
+        return jobs
+    except Exception as e:
+        log.error(f"_get_browse_jobs failed: {e}", exc_info=True)
+        # Return cached jobs even if stale, or empty list as fallback
+        if _browse_cache["jobs"]:
+            log.warning("Returning stale cached jobs due to error")
+            return _browse_cache["jobs"]
+        return []
 
 
 @app.get("/jobs/browse")
@@ -2760,66 +2797,84 @@ async def browse_jobs(
     page_size: int = 18,
 ):
     """Return a paginated, filterable list of all indexed jobs."""
-    all_jobs = await asyncio.to_thread(_get_browse_jobs)
+    try:
+        all_jobs = await asyncio.to_thread(_get_browse_jobs)
+        
+        if not all_jobs:
+            log.warning("browse: no jobs loaded from any source")
+            return {
+                "jobs": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "has_more": False,
+                "message": "No jobs available at this time. Please try again later.",
+            }
 
-    if q.strip():
-        q_lower = q.strip().lower()
-        candidates = [
-            c for c in all_jobs
-            if q_lower in (c.get("title") or "").lower()
-            or q_lower in (c.get("company") or "").lower()
-            or q_lower in (c.get("role") or "").lower()
-            or q_lower in (c.get("description") or "").lower()
-            or any(q_lower in s.lower() for s in (c.get("skills") or []))
-        ]
-    else:
-        candidates = list(all_jobs)
+        if q.strip():
+            q_lower = q.strip().lower()
+            candidates = [
+                c for c in all_jobs
+                if q_lower in (c.get("title") or "").lower()
+                or q_lower in (c.get("company") or "").lower()
+                or q_lower in (c.get("role") or "").lower()
+                or q_lower in (c.get("description") or "").lower()
+                or any(q_lower in s.lower() for s in (c.get("skills") or []))
+            ]
+        else:
+            candidates = list(all_jobs)
 
-    # ── Filters ──────────────────────────────────────────
-    if location:
-        loc_lower = location.strip().lower()
-        candidates = [
-            c for c in candidates
-            if loc_lower in (c.get("location") or "").lower()
-            or loc_lower in (c.get("country") or "").lower()
-        ]
+        # ── Filters ──────────────────────────────────────────
+        if location:
+            loc_lower = location.strip().lower()
+            candidates = [
+                c for c in candidates
+                if loc_lower in (c.get("location") or "").lower()
+                or loc_lower in (c.get("country") or "").lower()
+            ]
 
-    if industry:
-        ind_lower = industry.strip().lower()
-        candidates = [
-            c for c in candidates
-            if ind_lower in (c.get("industry") or "").lower()
-            or ind_lower in (c.get("sector") or "").lower()
-        ]
+        if industry:
+            ind_lower = industry.strip().lower()
+            candidates = [
+                c for c in candidates
+                if ind_lower in (c.get("industry") or "").lower()
+                or ind_lower in (c.get("sector") or "").lower()
+            ]
 
-    total = len(candidates)
-    start = page * page_size
-    page_jobs = candidates[start: start + page_size]
+        total = len(candidates)
+        start = page * page_size
+        page_jobs = candidates[start: start + page_size]
 
-    results = []
-    for job in page_jobs:
-        results.append({
-            "title": job.get("title", ""),
-            "company": job.get("company", ""),
-            "location": job.get("location", ""),
-            "country": job.get("country", ""),
-            "work_type": job.get("work_type", ""),
-            "salary": job.get("salary", ""),
-            "experience": job.get("experience", ""),
-            "skills": (job.get("skills") or [])[:10],
-            "description": (job.get("description") or "")[:300],
-            "industry": job.get("industry", ""),
-            "source": job.get("source", ""),
-            "external_url": job.get("external_url", ""),
-        })
+        results = []
+        for job in page_jobs:
+            results.append({
+                "title": job.get("title", ""),
+                "company": job.get("company", ""),
+                "location": job.get("location", ""),
+                "country": job.get("country", ""),
+                "work_type": job.get("work_type", ""),
+                "salary": job.get("salary", ""),
+                "experience": job.get("experience", ""),
+                "skills": (job.get("skills") or [])[:10],
+                "description": (job.get("description") or "")[:300],
+                "industry": job.get("industry", ""),
+                "source": job.get("source", ""),
+                "external_url": job.get("external_url", ""),
+            })
 
-    return {
-        "jobs": results,
-        "total": total,
-        "page": page,
-        "page_size": page_size,
-        "has_more": (start + page_size) < total,
-    }
+        return {
+            "jobs": results,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "has_more": (start + page_size) < total,
+        }
+    except Exception as e:
+        log.error(f"browse_jobs error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to load jobs: {str(e)}"
+        )
 
 
 # ── Serve frontend/ at / and /dashboard ───────────────────────────────────
