@@ -554,7 +554,9 @@ class SendResultsRequest(BaseModel):
     results: Optional[object] = None
 
 class SendCoverLetterRequest(BaseModel):
-    recruiter_email: str
+    recruiter_email: str = ""
+    # Backward-compatible alias accepted from older clients
+    email: str = ""
     applicant_name: str = ""
     applicant_email: str = ""
     job_title: str = ""
@@ -924,6 +926,25 @@ def _sanitize_cover_letter_output(text: str) -> str:
     cleaned = re.sub(r"\s*```$", "", cleaned)
     cleaned = re.sub(r"^(?:here(?:'s| is)?|below is)\s+(?:a\s+)?cover\s+letter[:\s-]*\n", "", cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
+
+
+def _fill_cover_letter_placeholders(text: str, applicant: str, role: str, company: str) -> str:
+    if not text:
+        return ""
+    replacements = {
+        "[company]": company,
+        "<company>": company,
+        "[role]": role,
+        "<role>": role,
+        "[applicant name]": applicant,
+        "<applicant name>": applicant,
+        "[your name]": applicant,
+        "<your name>": applicant,
+    }
+    updated = text
+    for needle, value in replacements.items():
+        updated = re.sub(re.escape(needle), value, updated, flags=re.IGNORECASE)
+    return updated
 
 
 def _resolve_cover_letter_inputs(req: CoverLetterRequest) -> tuple[UserProfile, str, str, str]:
@@ -2145,14 +2166,18 @@ Formatting requirements:
 - End with a brief closing and signature exactly:
   Best regards,
   <Applicant Name>
-- Do NOT include subject line, date, postal address, or placeholders like [Company].
+- Never output placeholders like [Company], <Company>, [Role], or [Applicant Name].
+- Do NOT include subject line, date, postal address.
 - Keep it natural and specific, not generic."""
 
     raw = await gemini_generate_async(
         prompt,
         {"temperature": 0.7, "maxOutputTokens": 600},
     )
-    return {"cover_letter": _sanitize_cover_letter_output(raw), "mode": "llm"}
+    applicant_name = profile.name or "the applicant"
+    sanitized = _sanitize_cover_letter_output(raw)
+    sanitized = _fill_cover_letter_placeholders(sanitized, applicant_name, job_title, company)
+    return {"cover_letter": sanitized, "mode": "llm"}
 
 
 @app.post("/bookmark", dependencies=[Depends(verify_api_key), Depends(require_bearer_jwt)])
@@ -2413,7 +2438,7 @@ async def send_cover_letter(req: SendCoverLetterRequest):
         missing = ", ".join(status["missing"]) if status["missing"] else "unknown configuration"
         raise HTTPException(status_code=503, detail=f"Email service not configured: {missing}")
 
-    recipient = (req.recruiter_email or "").strip().lower()
+    recipient = (_safe_str(req.recruiter_email) or _safe_str(req.email)).strip().lower()
     if not _is_valid_email(recipient):
         raise HTTPException(status_code=422, detail="Please provide a valid recruiter email address")
 
