@@ -2271,10 +2271,13 @@ async function tailorResume(jobTitle, company, jobDesc, jobSkills) {
   tailorResumeModal?.classList.remove('hidden');
 
   const headers = AUTH.headers();
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120000);
   try {
-    const res = await fetch(CONFIG.API_BASE_URL + '/tailor-resume', {
+    const res = await fetchWithRetry(CONFIG.API_BASE_URL + '/tailor-resume', {
       method: 'POST',
       headers,
+      signal: controller.signal,
       body: JSON.stringify({
         resume_text: lastResumeText,
         job_title: jobTitle,
@@ -2291,7 +2294,10 @@ async function tailorResume(jobTitle, company, jobDesc, jobSkills) {
     const data = await res.json();
     if (contentEl) contentEl.innerHTML = renderTailorReport(data, jobTitle, company);
   } catch (err) {
-    if (contentEl) contentEl.innerHTML = `<p class="tailor-error">Tailoring failed: ${esc(err.message)}</p>`;
+    const msg = err.name === 'AbortError' ? 'Request timed out — please try again' : err.message;
+    if (contentEl) contentEl.innerHTML = `<p class="tailor-error">Tailoring failed: ${esc(msg)}</p>`;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
