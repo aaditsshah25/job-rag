@@ -857,21 +857,31 @@ async def init_db():
     await _ensure_table_columns()
 
 # ─── Lifespan ─────────────────────────────────────────
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def _background_startup():
+    """Run slow startup tasks after the app is already serving requests."""
     try:
-        await init_db()
         seeded = await _seed_jobs_from_existing_sources()
         if seeded:
             log.info("Seeded canonical jobs table with %d existing listings.", seeded)
     except Exception as e:
-        log.error("DB init/seed failed (non-fatal): %s", e)
+        log.error("DB seed failed (non-fatal): %s", e)
     if PINECONE_API_KEY:
         try:
             force_reindex = _env_flag("FORCE_REINDEX", default=False)
-            index_dataset(force=force_reindex)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: index_dataset(force=force_reindex))
         except Exception as e:
             log.error("Auto-index failed: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        await init_db()
+    except Exception as e:
+        log.error("DB init failed (non-fatal): %s", e)
+    # Start slow tasks (seeding + indexing) in background so the app serves immediately
+    asyncio.create_task(_background_startup())
     yield
 
 # ─── FastAPI App ──────────────────────────────────────
@@ -1825,14 +1835,57 @@ async def _count_jobs_db() -> int:
 
 
 async def _seed_jobs_from_existing_sources() -> int:
-    if await _count_jobs_db() > 0:
+    force_reseed = _env_flag("FORCE_RESEED", default=False)
+    current_count = await _count_jobs_db()
+    if current_count > 0 and not force_reseed:
         return 0
+    if force_reseed and current_count > 0:
+        log.info("FORCE_RESEED=1: truncating jobs table and re-seeding from CSV (%d existing rows).", current_count)
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM jobs")
+            await db.commit()
     jobs = _load_adzuna_csv()
     if not jobs:
         df = get_csv_df()
-        jobs = [clean_row(df.iloc[i]) for i in range(len(df))] if not df.empty else []
-    saved = await _upsert_jobs_db(jobs)
-    return len(saved)
+        jobs = [clean_row(df.iloc[i]) for i in range(len(df))] if df is not None and not df.empty else []
+    if not jobs:
+        return 0
+    log.info("Seeding DB with %d jobs from CSV (bulk insert)...", len(jobs))
+    now = datetime.utcnow().isoformat()
+    inserted = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for raw in jobs:
+            job = _normalize_job_record(raw, default_source=_safe_str(raw.get("source")) or "adzuna")
+            if not job["title"]:
+                continue
+            uid = _job_uid(job)
+            await db.execute(
+                """
+                INSERT OR IGNORE INTO jobs (
+                    job_uid, job_id, title, role, company, location, country, work_type,
+                    company_size, experience, qualifications, salary, description,
+                    responsibilities, skills_json, benefits_json, sector, industry,
+                    posting_date, portal, source, external_url, active, indexed_at,
+                    first_seen_at, last_seen_at, raw_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    uid, job["job_id"], job["title"], job["role"], job["company"],
+                    job["location"], job["country"], job["work_type"], job["company_size"],
+                    job["experience"], job["qualifications"], job["salary"], job["description"],
+                    job["responsibilities"], json.dumps(job["skills"]), json.dumps(job["benefits"]),
+                    job["sector"], job["industry"], job["posting_date"], job["portal"],
+                    job["source"], job["external_url"], 1,
+                    None, now, now, json.dumps(job), now, now,
+                ),
+            )
+            inserted += 1
+            if inserted % 500 == 0:
+                await db.commit()
+                log.info("Bulk seed progress: %d / %d", inserted, len(jobs))
+        await db.commit()
+    return inserted
 
 
 def _index_jobs_to_pinecone(jobs: list[dict]) -> dict:
@@ -2063,7 +2116,7 @@ def get_or_create_index():
     return client.Index(PINECONE_INDEX)
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    max_attempts = 3
+    max_attempts = int(os.getenv("EMBED_MAX_ATTEMPTS", "10"))
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
@@ -2073,7 +2126,21 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             last_error = exc
             if attempt >= max_attempts:
                 break
-            backoff_seconds = 1.5 ** attempt
+            msg = str(exc)
+            msg_lower = msg.lower()
+            is_rate_limit = ("rate limit" in msg_lower) or ("rate_limit" in msg_lower) or (" 429" in msg_lower) or msg_lower.startswith("error code: 429")
+            retry_after = None
+            if is_rate_limit:
+                # OpenAI errors often include: "Please try again in 626ms."
+                m_ms = re.search(r"try again in\s+(\d+)\s*ms", msg_lower)
+                m_s = re.search(r"try again in\s+(\d+(?:\.\d+)?)\s*s", msg_lower)
+                if m_ms:
+                    retry_after = float(m_ms.group(1)) / 1000.0
+                elif m_s:
+                    retry_after = float(m_s.group(1))
+
+            backoff_seconds = retry_after if retry_after is not None else (1.5 ** attempt)
+            backoff_seconds = max(0.75, min(backoff_seconds + (0.25 * attempt), 30.0))
             log.warning(
                 "Embedding request failed (attempt %d/%d): %s; retrying in %.1fs",
                 attempt, max_attempts, exc, backoff_seconds,
@@ -2159,8 +2226,9 @@ def index_dataset(force: bool = False) -> int:
     }
 
     log.info("Total listings to index: %d", len(jobs))
-    EMBED_BATCH = 96
-    UPSERT_BATCH = 100
+    EMBED_BATCH = max(1, int(os.getenv("EMBED_BATCH_SIZE", "96")))
+    UPSERT_BATCH = max(1, int(os.getenv("UPSERT_BATCH_SIZE", "100")))
+    EMBED_MAX_WORKERS = max(1, int(os.getenv("EMBED_MAX_WORKERS", "5")))
     batches = [jobs[i: i + EMBED_BATCH] for i in range(0, len(jobs), EMBED_BATCH)]
     all_vectors = []
 
@@ -2189,7 +2257,7 @@ def index_dataset(force: bool = False) -> int:
             vectors.append({"id": vid, "values": emb, "metadata": meta})
         return vectors
 
-    with ThreadPoolExecutor(max_workers=5) as executor:
+    with ThreadPoolExecutor(max_workers=EMBED_MAX_WORKERS) as executor:
         futures = {executor.submit(embed_batch, (batch, i * EMBED_BATCH)): i for i, batch in enumerate(batches)}
         completed = 0
         for future in as_completed(futures):
@@ -4292,7 +4360,9 @@ def _load_adzuna_csv() -> list[dict]:
     """Load the Adzuna live jobs CSV which has pre-normalised column names."""
     if not _PANDAS_AVAILABLE:
         return []
-    adzuna_path = os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
+    # Prefer CSV_PATH (set via env), then fall back to the legacy exports path
+    legacy_path = os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
+    adzuna_path = CSV_PATH if os.path.isfile(CSV_PATH) else legacy_path
     if not os.path.isfile(adzuna_path):
         return []
     df = pd.read_csv(adzuna_path)
@@ -4305,22 +4375,37 @@ def _load_adzuna_csv() -> list[dict]:
             skills = _ast.literal_eval(skills_raw) if skills_raw.startswith("[") else _parse_skills(skills_raw)
         except Exception:
             skills = _parse_skills(skills_raw)
+        benefits_raw = _safe_str(row.get("benefits", "[]"))
+        try:
+            benefits = _ast.literal_eval(benefits_raw) if benefits_raw.startswith("[") else _parse_benefits(benefits_raw)
+        except Exception:
+            benefits = _parse_benefits(benefits_raw)
+        description = _safe_str(row.get("description", ""))
+        responsibilities = _safe_str(row.get("responsibilities", ""))
+        if not skills:
+            skills = _extract_skills_from_text(f"{description} {responsibilities}")
         jobs.append({
-            "job_id":       str(row.get("job_id", "")),
-            "title":        _safe_str(row.get("title", "")),
-            "role":         _safe_str(row.get("role", "")),
-            "company":      _safe_str(row.get("company", "")),
-            "location":     _safe_str(row.get("location", "")),
-            "country":      _safe_str(row.get("country", "")),
-            "work_type":    _safe_str(row.get("work_type", "")),
-            "salary":       _safe_str(row.get("salary", "")),
-            "experience":   _safe_str(row.get("experience", "")),
-            "description":  _safe_str(row.get("description", "")),
-            "skills":       [s for s in skills if isinstance(s, str)],
-            "industry":     _safe_str(row.get("industry", "")),
-            "source":       _safe_str(row.get("source", "adzuna")),
-            "external_url": _safe_str(row.get("external_url", "")),
-            "posting_date": _safe_str(row.get("posting_date", "")),
+            "job_id":           str(row.get("job_id", "")),
+            "title":            _safe_str(row.get("title", "")),
+            "role":             _safe_str(row.get("role", "")),
+            "company":          _safe_str(row.get("company", "")),
+            "location":         _safe_str(row.get("location", "")),
+            "country":          _safe_str(row.get("country", "")),
+            "work_type":        _safe_str(row.get("work_type", "")),
+            "company_size":     _safe_str(row.get("company_size", "")),
+            "experience":       _safe_str(row.get("experience", "")),
+            "qualifications":   _safe_str(row.get("qualifications", "")),
+            "salary":           _safe_str(row.get("salary", "")),
+            "description":      description,
+            "responsibilities": responsibilities,
+            "skills":           [s for s in skills if isinstance(s, str)],
+            "benefits":         [b for b in benefits if isinstance(b, str)],
+            "sector":           _safe_str(row.get("sector", "")),
+            "industry":         _safe_str(row.get("industry", "")),
+            "portal":           _safe_str(row.get("portal", "")),
+            "source":           _safe_str(row.get("source", "adzuna")),
+            "external_url":     _safe_str(row.get("external_url", "")),
+            "posting_date":     _safe_str(row.get("posting_date", "")),
         })
     return [j for j in jobs if j["title"]]
 
