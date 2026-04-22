@@ -134,7 +134,6 @@ function signOut() {
   AUTH.clearSession();
   setLandingHidden(false);
   document.getElementById('app-shell')?.classList.add('hidden');
-  setAuthGateVisible(false);
   document.getElementById('accountChip')?.classList.add('hidden');
   AppState.bookmarks = [];
   AppState.applications = [];
@@ -151,6 +150,7 @@ function signOut() {
     sendCoverBtn.title = emailServiceIssue;
   }
   setAuthStatus('Signed out. Please sign in with Google to continue.');
+  initGoogleGate();
 }
 
 function handleAuthFailure(message = 'Your session expired. Please sign in again.') {
