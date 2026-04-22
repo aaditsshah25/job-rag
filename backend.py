@@ -33,7 +33,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Optional
-from urllib.parse import urlencode
+from urllib.parse import urlparse, urlencode
 from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError, HTTPError
 
@@ -212,6 +212,130 @@ def _job_key_from_job(job: dict) -> str:
         country=_safe_str(job.get("country", "")),
         external_url=_safe_str(job.get("external_url", "")),
     )
+
+
+def _dup_norm(value: str, limit: int | None = None) -> str:
+    cleaned = re.sub(r"\s+", " ", _safe_str(value).lower()).strip()
+    if limit is not None:
+        return cleaned[:limit]
+    return cleaned
+
+
+def _canonical_external_url(value: str) -> str:
+    raw = _safe_str(value)
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if parsed.netloc:
+        return f"{parsed.netloc.lower()}{parsed.path.lower().rstrip('/')}"
+    return raw.lower().split("?", 1)[0].rstrip("/")
+
+
+def _job_duplicate_signatures(job: dict) -> set[str]:
+    signatures: set[str] = set()
+    job_key = _safe_str(job.get("job_key")) or _job_key_from_job(job)
+    if job_key:
+        signatures.add(f"job_key:{job_key}")
+
+    canonical_url = _canonical_external_url(job.get("external_url", ""))
+    if canonical_url:
+        signatures.add(f"url:{canonical_url}")
+
+    title = _dup_norm(job.get("title", ""))
+    company = _dup_norm(job.get("company", ""))
+    if title and company:
+        semantic_raw = "|".join(
+            [
+                title,
+                company,
+                _dup_norm(job.get("location", "")),
+                _dup_norm(job.get("country", "")),
+                _dup_norm(job.get("description", ""), 700),
+            ]
+        )
+        signatures.add(f"semantic:{hashlib.md5(semantic_raw.encode('utf-8')).hexdigest()}")
+
+    return signatures
+
+
+async def _load_existing_job_duplicate_signatures() -> set[str]:
+    signatures: set[str] = set()
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        try:
+            async with db.execute(
+                """
+                SELECT job_key, title, company, location, country, external_url, description
+                FROM admin_jobs
+                """
+            ) as cursor:
+                rows = await cursor.fetchall()
+            for row in rows:
+                item = dict(row)
+                signatures.update(_job_duplicate_signatures(item))
+        except Exception as exc:
+            log.warning("Could not load admin job duplicate signatures: %s", exc)
+
+        try:
+            async with db.execute(
+                """
+                SELECT title, company, location, country, external_url, description
+                FROM jobs
+                """
+            ) as cursor:
+                rows = await cursor.fetchall()
+            for row in rows:
+                signatures.update(_job_duplicate_signatures(dict(row)))
+        except Exception as exc:
+            log.warning("Could not load canonical job duplicate signatures: %s", exc)
+    return signatures
+
+
+def _split_new_and_duplicate_jobs(
+    jobs: list[dict],
+    existing_signatures: set[str],
+) -> tuple[list[dict], list[dict]]:
+    new_jobs: list[dict] = []
+    duplicates: list[dict] = []
+    upload_signatures: set[str] = set()
+
+    for job in jobs:
+        signatures = _job_duplicate_signatures(job)
+        if signatures & existing_signatures:
+            duplicates.append({"job": job, "reason": "already_exists"})
+            continue
+        if signatures & upload_signatures:
+            duplicates.append({"job": job, "reason": "duplicate_in_upload"})
+            continue
+        new_jobs.append(job)
+        upload_signatures.update(signatures)
+
+    return new_jobs, duplicates
+
+
+def _admin_vector_id(job: dict, chunk_index: int = 0) -> str:
+    base_id = _safe_str(job.get("job_id") or job.get("job_key", ""))
+    return f"admin_{hashlib.md5(base_id.encode()).hexdigest()[:16]}_c{chunk_index}"
+
+
+def _find_existing_admin_pinecone_job_keys(jobs: list[dict]) -> set[str]:
+    if not jobs or not PINECONE_API_KEY:
+        return set()
+    index = get_or_create_index()
+    id_to_job_key = {_admin_vector_id(job, 0): _safe_str(job.get("job_key")) for job in jobs}
+    existing: set[str] = set()
+    ids = list(id_to_job_key)
+    for i in range(0, len(ids), 100):
+        batch_ids = ids[i: i + 100]
+        fetched = index.fetch(ids=batch_ids)
+        vectors = getattr(fetched, "vectors", None)
+        if vectors is None and isinstance(fetched, dict):
+            vectors = fetched.get("vectors", {})
+        for vector_id in (vectors or {}):
+            job_key = id_to_job_key.get(vector_id)
+            if job_key:
+                existing.add(job_key)
+    return existing
 
 
 def _load_suppressed_job_keys_sync() -> set[str]:
@@ -1840,8 +1964,7 @@ def _index_admin_jobs_incremental(jobs: list[dict]) -> int:
         }
         for c_idx, chunk_text in enumerate(chunks):
             emb = _hash_embed_text(chunk_text)
-            base_id = _safe_str(job.get("job_id") or job.get("job_key", ""))
-            vid = f"admin_{hashlib.md5(base_id.encode()).hexdigest()[:16]}_c{c_idx}"
+            vid = _admin_vector_id(job, c_idx)
             meta = {**base_meta, "chunk_index": c_idx, "total_chunks": len(chunks)}
             vectors.append({"id": vid, "values": emb, "metadata": meta})
 
@@ -4470,35 +4593,67 @@ async def admin_upload_jobs(
     rows_total = max(0, (reader.line_num or 1) - 1)
     rows_valid = len(valid_jobs)
     rows_invalid = rows_total - rows_valid
+    existing_signatures = await _load_existing_job_duplicate_signatures()
+    jobs_to_insert, duplicate_jobs = _split_new_and_duplicate_jobs(valid_jobs, existing_signatures)
+
+    duplicate_examples = [
+        {
+            "row_title": dup["job"].get("title", ""),
+            "company": dup["job"].get("company", ""),
+            "location": dup["job"].get("location", ""),
+            "external_url": dup["job"].get("external_url", ""),
+            "reason": dup["reason"],
+        }
+        for dup in duplicate_jobs[:20]
+    ]
 
     if dry_run:
         return {
             "rows_total": rows_total,
             "rows_valid": rows_valid,
             "rows_invalid": rows_invalid,
+            "rows_new": len(jobs_to_insert),
+            "rows_duplicates": len(duplicate_jobs),
             "errors": errors,
-            "sample_valid": valid_jobs[:5],
+            "duplicate_examples": duplicate_examples,
+            "sample_valid": jobs_to_insert[:5],
         }
+
+    pinecone_duplicate_jobs: list[dict] = []
+    if PINECONE_API_KEY and jobs_to_insert:
+        try:
+            existing_pinecone_keys = await asyncio.to_thread(_find_existing_admin_pinecone_job_keys, jobs_to_insert)
+            if existing_pinecone_keys:
+                still_new: list[dict] = []
+                for job in jobs_to_insert:
+                    if job["job_key"] in existing_pinecone_keys:
+                        pinecone_duplicate_jobs.append({"job": job, "reason": "already_indexed_in_pinecone"})
+                    else:
+                        still_new.append(job)
+                jobs_to_insert = still_new
+                duplicate_examples.extend(
+                    {
+                        "row_title": dup["job"].get("title", ""),
+                        "company": dup["job"].get("company", ""),
+                        "location": dup["job"].get("location", ""),
+                        "external_url": dup["job"].get("external_url", ""),
+                        "reason": dup["reason"],
+                    }
+                    for dup in pinecone_duplicate_jobs[: max(0, 20 - len(duplicate_examples))]
+                )
+        except Exception as exc:
+            log.warning("Could not verify existing admin Pinecone vectors before upload: %s", exc)
 
     created_by = _user_email_from_payload(token_payload)
     now = datetime.utcnow().isoformat() + "Z"
     inserted = 0
-    updated = 0
+    skipped_existing = len(duplicate_jobs) + len(pinecone_duplicate_jobs)
+    inserted_jobs: list[dict] = []
     async with aiosqlite.connect(DB_PATH) as db:
-        for job in valid_jobs:
-            # Determine if this job already exists
-            async with db.execute("SELECT id FROM admin_jobs WHERE job_key = ?", (job["job_key"],)) as c:
-                existing = await c.fetchone()
-            if existing:
-                updated += 1
-            else:
-                inserted += 1
-
-            await db.execute(
-                "INSERT INTO admin_jobs (job_key, job_id, title, company, location, country, work_type, salary, experience, industry, description, external_url, posting_date, skills_json, benefits_json, status, created_by, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?) "
-                "ON CONFLICT(job_key) DO UPDATE SET "
-                "job_id=excluded.job_id, title=excluded.title, company=excluded.company, location=excluded.location, country=excluded.country, work_type=excluded.work_type, salary=excluded.salary, experience=excluded.experience, industry=excluded.industry, description=excluded.description, external_url=excluded.external_url, posting_date=excluded.posting_date, skills_json=excluded.skills_json, benefits_json=excluded.benefits_json, status='active', updated_at=excluded.updated_at",
+        for job in jobs_to_insert:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO admin_jobs (job_key, job_id, title, company, location, country, work_type, salary, experience, industry, description, external_url, posting_date, skills_json, benefits_json, status, created_by, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)",
                 (
                     job["job_key"],
                     job["job_id"],
@@ -4520,15 +4675,20 @@ async def admin_upload_jobs(
                     now,
                 ),
             )
+            if cursor.rowcount == 1:
+                inserted += 1
+                inserted_jobs.append(job)
+            else:
+                skipped_existing += 1
         await db.commit()
 
     _browse_cache["fetched_at"] = 0.0
     _search_cache.clear()
 
-    # Incrementally upsert the new/updated jobs into Pinecone (chunked, no full wipe)
+    # Incrementally upsert only newly accepted jobs into Pinecone (chunked, no full wipe)
     indexed_vectors = 0
     index_error = None
-    if PINECONE_API_KEY and valid_jobs:
+    if PINECONE_API_KEY and inserted_jobs:
         try:
             # Build job dicts in the same shape _load_admin_jobs_sync returns
             jobs_for_index = [
@@ -4555,7 +4715,7 @@ async def admin_upload_jobs(
                     "source": "admin_upload",
                     "external_url": j["external_url"],
                 }
-                for j in valid_jobs
+                for j in inserted_jobs
             ]
             indexed_vectors = await asyncio.to_thread(_index_admin_jobs_incremental, jobs_for_index)
         except Exception as exc:
@@ -4565,8 +4725,13 @@ async def admin_upload_jobs(
     return {
         "status": "ok",
         "inserted": inserted,
-        "updated": updated,
+        "updated": 0,
+        "skipped_duplicates": skipped_existing,
         "rows_total": rows_total,
+        "rows_valid": rows_valid,
+        "rows_new": inserted,
+        "rows_duplicates": skipped_existing,
+        "duplicate_examples": duplicate_examples,
         "indexed_vectors": indexed_vectors,
         "index_error": index_error,
     }

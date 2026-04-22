@@ -3084,12 +3084,18 @@ async function adminUploadCsv(dryRun) {
     }
 
     if (dryRun) {
-      if (statusEl) statusEl.textContent = `${data.rows_valid || 0} valid / ${data.rows_invalid || 0} invalid (of ${data.rows_total || 0})`;
+      const duplicateCount = data.rows_duplicates || 0;
+      if (statusEl) statusEl.textContent = `${data.rows_new || 0} new / ${duplicateCount} duplicate / ${data.rows_invalid || 0} invalid (of ${data.rows_total || 0})`;
       const errors = Array.isArray(data.errors) ? data.errors : [];
+      const duplicates = Array.isArray(data.duplicate_examples) ? data.duplicate_examples : [];
       const sample = Array.isArray(data.sample_valid) ? data.sample_valid : [];
+      const duplicateHtml = duplicates.length
+        ? `<div style="margin-top:10px"><strong>Duplicates skipped</strong><br>${duplicates.slice(0, 10).map(d => `${esc(d.row_title)} - ${esc(d.company)} (${esc(d.reason)})`).join('<br>')}</div>`
+        : '';
       if (previewEl) {
         previewEl.innerHTML = `
           ${errors.length ? `<div><strong>Errors (first ${errors.length})</strong><br>${errors.slice(0, 10).map(e => `Row ${esc(e.row_index)}: ${esc(e.message)}`).join('<br>')}</div>` : '<div><strong>No validation errors.</strong></div>'}
+          ${duplicateHtml}
           ${sample.length ? `<div style="margin-top:10px"><strong>Sample</strong><br>${sample.map(s => `${esc(s.title)} — ${esc(s.company)}`).join('<br>')}</div>` : ''}
         `;
       }
@@ -3099,7 +3105,8 @@ async function adminUploadCsv(dryRun) {
         : data.indexed_vectors != null
           ? ` — ${data.indexed_vectors} vectors in Pinecone`
           : '';
-      if (statusEl) statusEl.textContent = `Imported. Inserted ${data.inserted || 0}, updated ${data.updated || 0}${indexNote}.`;
+      const duplicateNote = data.skipped_duplicates ? `, skipped ${data.skipped_duplicates} duplicates` : '';
+      if (statusEl) statusEl.textContent = `Imported. Inserted ${data.inserted || 0}${duplicateNote}${indexNote}.`;
       showToast('Jobs imported and indexed');
       fetchAndRenderAdminActiveJobs();
     }

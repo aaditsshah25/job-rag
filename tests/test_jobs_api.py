@@ -182,3 +182,49 @@ def test_webhook_output_does_not_echo_prompt_injection_text():
         assert "system prompt" not in output
     if db_path.exists():
         db_path.unlink()
+
+
+def test_admin_csv_upload_inserts_only_new_jobs_and_skips_duplicates():
+    original_admins = backend.ADMIN_EMAILS
+    backend.ADMIN_EMAILS = {"admin@example.com"}
+    client_ctx, db_path = make_client()
+    token = backend._create_access_token("admin@example.com", "Admin", "")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    csv_body = (
+        "title,company,location,country,description,external_url,skills\n"
+        "Software Engineer,Acme,Bangalore,IN,Build APIs,https://example.com/jobs/1,Python\n"
+        "Software Engineer,Acme,Bangalore,IN,Build APIs,https://example.com/jobs/1,Python\n"
+    )
+    semantic_duplicate_csv = (
+        "title,company,location,country,description,external_url,skills\n"
+        "Software Engineer,Acme,Bangalore,IN,Build APIs,https://example.com/jobs/2,Python\n"
+    )
+
+    try:
+        with client_ctx as client:
+            first = client.post(
+                "/admin/jobs/upload?dry_run=false",
+                headers=headers,
+                files={"file": ("jobs.csv", csv_body, "text/csv")},
+            )
+            assert first.status_code == 200
+            first_payload = first.json()
+            assert first_payload["inserted"] == 1
+            assert first_payload["skipped_duplicates"] == 1
+            assert first_payload["indexed_vectors"] == 0
+
+            second = client.post(
+                "/admin/jobs/upload?dry_run=false",
+                headers=headers,
+                files={"file": ("jobs.csv", semantic_duplicate_csv, "text/csv")},
+            )
+            assert second.status_code == 200
+            second_payload = second.json()
+            assert second_payload["inserted"] == 0
+            assert second_payload["skipped_duplicates"] == 1
+            assert second_payload["indexed_vectors"] == 0
+    finally:
+        backend.ADMIN_EMAILS = original_admins
+        if db_path.exists():
+            db_path.unlink()
