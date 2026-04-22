@@ -1024,6 +1024,11 @@ async function handleResumeUpload(file) {
     resumeStatus.className = 'resume-status error';
     return;
   }
+  if (file.size > 5 * 1024 * 1024) {
+    resumeStatus.textContent = 'File too large. Maximum size is 5 MB.';
+    resumeStatus.className = 'resume-status error';
+    return;
+  }
   resumeStatus.textContent = 'Parsing resume...';
   resumeStatus.className = 'resume-status loading';
 

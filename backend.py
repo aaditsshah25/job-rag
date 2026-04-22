@@ -3594,7 +3594,7 @@ async def refresh_jobs(req: JobRefreshRequest = JobRefreshRequest()):
     }
 
 
-MAX_RESUME_BYTES = int(os.getenv("MAX_RESUME_BYTES", str(8 * 1024 * 1024)))  # 8 MB default
+MAX_RESUME_BYTES = int(os.getenv("MAX_RESUME_BYTES", str(5 * 1024 * 1024)))  # 5 MB default
 
 @app.post("/parse-resume", dependencies=[Depends(verify_api_key)])
 async def parse_resume(file: UploadFile = File(...)):
