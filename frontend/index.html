@@ -152,6 +152,9 @@
           My Applications
           <span id="applicationsBadge" class="myapps-nav-badge hidden">0</span>
         </button>
+        <button id="adminPanelBtn" class="btn-secondary myapps-nav-btn hidden" type="button">
+          Admin
+        </button>
         <div class="account-chip hidden" id="accountChip">
           <div class="account-avatar" id="accountAvatar">A</div>
           <div class="account-meta">
@@ -401,6 +404,96 @@
         <div id="myAppsTabs" class="myapps-tabs" role="tablist" aria-label="Application filters"></div>
         <div id="myApplicationsList" class="myapps-list"></div>
         <button id="findJobsBtn" class="hidden" type="button">Find Jobs</button>
+      </div>
+    </section>
+
+    <section id="adminPanel" class="hidden">
+      <div class="admin-shell">
+        <div class="admin-header">
+          <div>
+            <h2>Admin</h2>
+            <p class="admin-subtitle">Manage listings: remove jobs and upload new ones</p>
+          </div>
+          <button id="backFromAdminBtn" class="btn-secondary" type="button">Back to CV Upload</button>
+        </div>
+
+        <div class="admin-tabs" role="tablist" aria-label="Admin sections">
+          <button id="adminTabActive" class="admin-tab active" type="button">Active Jobs</button>
+          <button id="adminTabBlocked" class="admin-tab" type="button">Blocked Jobs</button>
+          <button id="adminTabUpload" class="admin-tab" type="button">Upload CSV</button>
+        </div>
+
+        <!-- Active Jobs -->
+        <div id="adminActiveView">
+          <div class="admin-filters-bar">
+            <input id="adminActiveSearchInput" class="browse-search-input" type="text" placeholder="Search by role, company, or keyword…" autocomplete="off" />
+            <div class="admin-filter-row">
+              <input id="adminActiveLocationInput" class="browse-filter-input" type="text" placeholder="City or country…" autocomplete="off" />
+              <div class="browse-filter-actions">
+                <button id="adminActiveClearBtn" class="browse-clear-btn" type="button">Clear</button>
+                <button id="adminActiveSearchBtn" class="browse-go-btn" type="button">Search</button>
+              </div>
+            </div>
+          </div>
+
+          <div id="adminActiveState" class="state-card">
+            <div class="state-icon">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+            </div>
+            <h3>Load active listings</h3>
+            <p>Search to review live jobs and remove any listing.</p>
+          </div>
+          <div id="adminActiveLoading" class="state-card hidden">
+            <div class="loader"><div class="loader-ring"></div></div>
+            <h3>Loading jobs…</h3>
+          </div>
+          <div id="adminActiveResultsCount" class="browse-results-count hidden"></div>
+          <div id="adminActiveGrid" class="admin-grid hidden"></div>
+          <div id="adminActivePagination" class="browse-pagination hidden">
+            <button id="adminActivePrevBtn" class="btn-secondary" type="button" disabled>← Prev</button>
+            <span id="adminActivePageInfo" class="browse-page-info"></span>
+            <button id="adminActiveNextBtn" class="btn-secondary" type="button">Next →</button>
+          </div>
+        </div>
+
+        <!-- Blocked Jobs -->
+        <div id="adminBlockedView" class="hidden">
+          <div id="adminBlockedState" class="state-card">
+            <div class="state-icon">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18.364 5.636l-12.728 12.728"/><circle cx="12" cy="12" r="10"/></svg>
+            </div>
+            <h3>Blocked jobs</h3>
+            <p>Restore any listing to make it visible again.</p>
+          </div>
+          <div id="adminBlockedLoading" class="state-card hidden">
+            <div class="loader"><div class="loader-ring"></div></div>
+            <h3>Loading blocked jobs…</h3>
+          </div>
+          <div id="adminBlockedList" class="admin-blocked-list hidden"></div>
+          <div id="adminBlockedPagination" class="browse-pagination hidden">
+            <button id="adminBlockedPrevBtn" class="btn-secondary" type="button" disabled>← Prev</button>
+            <span id="adminBlockedPageInfo" class="browse-page-info"></span>
+            <button id="adminBlockedNextBtn" class="btn-secondary" type="button">Next →</button>
+          </div>
+        </div>
+
+        <!-- Upload CSV -->
+        <div id="adminUploadView" class="hidden">
+          <div class="admin-upload-card">
+            <h3>Upload jobs (CSV)</h3>
+            <p class="admin-upload-help">Required columns: <strong>title</strong>, <strong>company</strong>. Optional: location, country, work_type, salary, experience, industry, description, external_url, posting_date, skills.</p>
+
+            <input id="adminUploadFile" type="file" accept=".csv,text/csv" />
+            <div class="admin-upload-actions">
+              <button id="adminUploadDryRunBtn" class="btn-secondary" type="button">Preview</button>
+              <button id="adminUploadImportBtn" class="btn-primary" type="button">Import</button>
+              <button id="adminReindexBtn" class="btn-secondary" type="button">Reindex</button>
+            </div>
+
+            <div id="adminUploadStatus" class="admin-upload-status"></div>
+            <div id="adminUploadPreview" class="admin-upload-preview"></div>
+          </div>
+        </div>
       </div>
     </section>
 

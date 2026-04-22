@@ -20,6 +20,7 @@ import re
 import json
 import math
 import ast
+import csv
 import html
 import asyncio
 import logging
@@ -27,6 +28,7 @@ import hashlib
 import uuid
 import io
 import time
+import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -169,6 +171,154 @@ if not JWT_SECRET:
     log.warning("JWT_SECRET is not configured; using insecure development fallback. Set JWT_SECRET in .env for production.")
 JWT_ALGORITHM     = "HS256"
 JWT_EXPIRE_HOURS  = int(os.getenv("JWT_EXPIRE_HOURS", "72"))
+
+ADMIN_EMAILS_RAW = os.getenv("ADMIN_EMAILS", "")
+ADMIN_EMAILS: set[str] = {
+    e.strip().lower()
+    for e in ADMIN_EMAILS_RAW.split(",")
+    if e and e.strip()
+}
+
+_SUPPRESSION_CACHE: dict[str, object] = {"keys": set(), "fetched_at": 0.0}
+_SUPPRESSION_CACHE_TTL_SECONDS = int(os.getenv("SUPPRESSION_CACHE_TTL_SECONDS", "60"))
+
+def _compute_job_key(
+    source: str = "",
+    title: str = "",
+    company: str = "",
+    location: str = "",
+    country: str = "",
+    external_url: str = "",
+) -> str:
+    raw = "|".join(
+        [
+            (title or "").strip().lower(),
+            (company or "").strip().lower(),
+            (location or "").strip().lower(),
+            (country or "").strip().lower(),
+            (external_url or "").strip().lower(),
+        ]
+    )
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def _job_key_from_job(job: dict) -> str:
+    return _compute_job_key(
+        source=_safe_str(job.get("source", "")),
+        title=_safe_str(job.get("title", "")),
+        company=_safe_str(job.get("company", "")),
+        location=_safe_str(job.get("location", "")),
+        country=_safe_str(job.get("country", "")),
+        external_url=_safe_str(job.get("external_url", "")),
+    )
+
+
+def _load_suppressed_job_keys_sync() -> set[str]:
+    now = time.time()
+    cached_keys = _SUPPRESSION_CACHE.get("keys")
+    fetched_at = float(_SUPPRESSION_CACHE.get("fetched_at") or 0.0)
+    if isinstance(cached_keys, set) and (now - fetched_at) < _SUPPRESSION_CACHE_TTL_SECONDS:
+        return cached_keys
+
+    keys: set[str] = set()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT job_key FROM job_suppressions")
+            for (job_key,) in cur.fetchall():
+                if job_key:
+                    keys.add(str(job_key))
+        finally:
+            conn.close()
+    except Exception:
+        keys = set()
+
+    _SUPPRESSION_CACHE["keys"] = keys
+    _SUPPRESSION_CACHE["fetched_at"] = now
+    return keys
+
+
+def _invalidate_suppression_cache():
+    _SUPPRESSION_CACHE["fetched_at"] = 0.0
+
+
+def _load_admin_jobs_sync(active_only: bool = True) -> list[dict]:
+    where = "WHERE status = 'active'" if active_only else ""
+    jobs: list[dict] = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT job_key, job_id, title, company, location, country, work_type, salary, experience, industry, description, external_url, posting_date, skills_json, benefits_json, status "
+                f"FROM admin_jobs {where} ORDER BY id DESC"
+            )
+            rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        rows = []
+
+    for row in rows:
+        (
+            job_key,
+            job_id,
+            title,
+            company,
+            location,
+            country,
+            work_type,
+            salary,
+            experience,
+            industry,
+            description,
+            external_url,
+            posting_date,
+            skills_json,
+            benefits_json,
+            status,
+        ) = row
+        try:
+            skills = json.loads(skills_json or "[]")
+            if not isinstance(skills, list):
+                skills = []
+        except Exception:
+            skills = []
+        try:
+            benefits = json.loads(benefits_json or "[]")
+            if not isinstance(benefits, list):
+                benefits = []
+        except Exception:
+            benefits = []
+
+        jobs.append(
+            {
+                "job_key": _safe_str(job_key),
+                "job_id": _safe_str(job_id),
+                "title": _safe_str(title),
+                "role": _safe_str(title),
+                "company": _safe_str(company),
+                "location": _safe_str(location),
+                "country": _safe_str(country),
+                "work_type": _safe_str(work_type),
+                "salary": _safe_str(salary),
+                "experience": _safe_str(experience),
+                "industry": _safe_str(industry),
+                "description": _safe_str(description),
+                "responsibilities": "",
+                "qualifications": "",
+                "skills": [s for s in skills if isinstance(s, str)],
+                "benefits": [b for b in benefits if isinstance(b, str)],
+                "sector": "",
+                "company_size": "",
+                "posting_date": _safe_str(posting_date),
+                "source": "admin_upload",
+                "external_url": _safe_str(external_url),
+                "status": _safe_str(status),
+            }
+        )
+    return jobs
 
 # Warn if a non-existent model is configured
 _KNOWN_GEMMA_MODELS = {
@@ -345,6 +495,15 @@ async def require_bearer_jwt(authorization: Optional[str] = Header(default=None)
     return payload
 
 
+async def require_admin(token_payload: dict = Depends(require_bearer_jwt)):
+    email = _user_email_from_payload(token_payload)
+    if not ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Admin access is not configured")
+    if email not in ADMIN_EMAILS:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return token_payload
+
+
 def _user_email_from_payload(payload: dict) -> str:
     return _safe_str(payload.get("sub", "")).lower()
 
@@ -434,6 +593,45 @@ async def init_db():
                 tailored_score INTEGER,
                 analysis_json TEXT,
                 created_at TEXT
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS job_suppressions (
+                job_key TEXT PRIMARY KEY,
+                source TEXT,
+                title TEXT,
+                company TEXT,
+                location TEXT,
+                external_url TEXT,
+                reason TEXT,
+                blocked_by TEXT,
+                blocked_at TEXT
+            )
+        """)
+
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS admin_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_key TEXT UNIQUE,
+                job_id TEXT,
+                title TEXT,
+                company TEXT,
+                location TEXT,
+                country TEXT,
+                work_type TEXT,
+                salary TEXT,
+                experience TEXT,
+                industry TEXT,
+                description TEXT,
+                external_url TEXT,
+                posting_date TEXT,
+                skills_json TEXT,
+                benefits_json TEXT,
+                status TEXT DEFAULT 'active',
+                created_by TEXT,
+                created_at TEXT,
+                updated_at TEXT
             )
         """)
         await db.commit()
@@ -1301,6 +1499,11 @@ def index_dataset(force: bool = False) -> int:
                 "Set ENABLE_EXTERNAL_SOURCES=true and configure at least one source."
             )
 
+    # Admin-uploaded jobs (stored in SQLite)
+    admin_jobs = _load_admin_jobs_sync(active_only=True)
+    if admin_jobs:
+        jobs.extend(admin_jobs)
+
     if not jobs:
         raise RuntimeError(
             "No jobs available for indexing. Check INDEX_MODE, CSV_PATH, and external source config."
@@ -1418,8 +1621,12 @@ def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
 
     tokens = _tokenize_query(query)
     scored = []
+    suppressed = _load_suppressed_job_keys_sync()
     for i in range(len(df)):
         job = clean_row(df.iloc[i])
+        job["job_key"] = _job_key_from_job(job)
+        if job["job_key"] in suppressed:
+            continue
         text = " ".join([
             job.get("title", ""),
             job.get("role", ""),
@@ -1438,7 +1645,7 @@ def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
         else:
             score = sum(1 for t in tokens if t in text) / max(len(tokens), 1)
         if score > 0:
-            scored.append({"score": round(float(score), 4), **job, "source": "local_csv_fallback"})
+            scored.append({"score": round(float(score), 4), **job})
 
     if not scored:
         # Ensure graceful degradation: if query tokens are too specific, still return broad options.
@@ -1617,7 +1824,15 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
             log.info("Vector retrieval returned 0 matches; using local CSV fallback search")
             return _search_jobs_local_csv(query, top_k=top_k)
 
-        return [_normalize_pinecone_match(m) for m in results.matches]
+        suppressed = _load_suppressed_job_keys_sync()
+        out: list[dict] = []
+        for m in results.matches:
+            job = _normalize_pinecone_match(m)
+            job["job_key"] = _job_key_from_job(job)
+            if job["job_key"] in suppressed:
+                continue
+            out.append(job)
+        return out
     except Exception as exc:
         msg = str(exc).lower()
         if "invalid api key" in msg or "unauthorized" in msg or "401" in msg:
@@ -3011,6 +3226,17 @@ def _get_browse_jobs() -> list[dict]:
         # Last resort: fetch all jobs from Pinecone index
         jobs = _fetch_all_jobs_from_pinecone()
 
+    # Append admin-uploaded jobs
+    try:
+        jobs.extend(_load_admin_jobs_sync(active_only=True))
+    except Exception:
+        pass
+
+    # Precompute job_key for fast suppression filtering
+    for job in jobs:
+        if isinstance(job, dict) and not job.get("job_key"):
+            job["job_key"] = _job_key_from_job(job)
+
     _browse_cache["jobs"] = jobs
     _browse_cache["fetched_at"] = now
     log.info("browse: cache loaded %d jobs", len(jobs))
@@ -3055,6 +3281,11 @@ async def browse_jobs(
         else:
             candidates = list(all_jobs)
 
+        # ── Suppress blocked jobs ────────────────────────────
+        suppressed = _load_suppressed_job_keys_sync()
+        if suppressed:
+            candidates = [c for c in candidates if _safe_str(c.get("job_key", "")) not in suppressed]
+
         # ── Filters ──────────────────────────────────────────
         if location:
             loc_lower = location.strip().lower()
@@ -3079,6 +3310,7 @@ async def browse_jobs(
         results = []
         for job in page_jobs:
             results.append({
+                "job_key": job.get("job_key", ""),
                 "title": job.get("title", ""),
                 "company": job.get("company", ""),
                 "location": job.get("location", ""),
@@ -3106,6 +3338,238 @@ async def browse_jobs(
             status_code=500,
             detail=f"Failed to load jobs: {str(e)}"
         )
+
+
+class AdminBlockJobRequest(BaseModel):
+    job_key: str
+    reason: str = ""
+    title: str = ""
+    company: str = ""
+    location: str = ""
+    source: str = ""
+    external_url: str = ""
+
+
+@app.get("/admin/me", dependencies=[Depends(verify_api_key)])
+async def admin_me(token_payload: dict = Depends(require_admin)):
+    return {
+        "email": _user_email_from_payload(token_payload),
+        "name": _safe_str(token_payload.get("name", "")),
+        "picture": _safe_str(token_payload.get("picture", "")),
+        "is_admin": True,
+    }
+
+
+@app.get("/admin/jobs/blocked", dependencies=[Depends(verify_api_key)])
+async def admin_list_blocked_jobs(
+    page: int = 0,
+    page_size: int = 50,
+    _: dict = Depends(require_admin),
+):
+    page_size = max(1, min(int(page_size), 200))
+    page = max(0, int(page))
+    offset = page * page_size
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT COUNT(*) AS cnt FROM job_suppressions") as c:
+            row = await c.fetchone()
+        total = int((row or {}).get("cnt", 0)) if isinstance(row, dict) else int(row[0] if row else 0)
+        async with db.execute(
+            "SELECT * FROM job_suppressions ORDER BY blocked_at DESC LIMIT ? OFFSET ?",
+            (page_size, offset),
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+    items = [dict(r) for r in rows] if rows else []
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "has_more": (offset + page_size) < total,
+    }
+
+
+@app.post("/admin/jobs/block", dependencies=[Depends(verify_api_key)])
+async def admin_block_job(req: AdminBlockJobRequest, token_payload: dict = Depends(require_admin)):
+    job_key = _safe_str(req.job_key)
+    if not job_key:
+        raise HTTPException(status_code=400, detail="job_key is required")
+    now = datetime.utcnow().isoformat() + "Z"
+    blocked_by = _user_email_from_payload(token_payload)
+
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO job_suppressions (job_key, source, title, company, location, external_url, reason, blocked_by, blocked_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                job_key,
+                _safe_str(req.source),
+                _safe_str(req.title),
+                _safe_str(req.company),
+                _safe_str(req.location),
+                _safe_str(req.external_url),
+                _safe_str(req.reason),
+                blocked_by,
+                now,
+            ),
+        )
+        await db.commit()
+
+    _invalidate_suppression_cache()
+    _browse_cache["fetched_at"] = 0.0
+    return {"status": "ok"}
+
+
+@app.delete("/admin/jobs/block/{job_key}", dependencies=[Depends(verify_api_key)])
+async def admin_unblock_job(job_key: str, _: dict = Depends(require_admin)):
+    job_key = _safe_str(job_key)
+    if not job_key:
+        raise HTTPException(status_code=400, detail="job_key is required")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM job_suppressions WHERE job_key = ?", (job_key,))
+        await db.commit()
+    _invalidate_suppression_cache()
+    _browse_cache["fetched_at"] = 0.0
+    return {"status": "ok"}
+
+
+@app.post("/admin/jobs/upload", dependencies=[Depends(verify_api_key)])
+async def admin_upload_jobs(
+    dry_run: bool = True,
+    file: UploadFile = File(...),
+    token_payload: dict = Depends(require_admin),
+):
+    filename = (file.filename or "").lower()
+    if not (filename.endswith(".csv") or file.content_type in ("text/csv", "application/vnd.ms-excel", "application/csv")):
+        raise HTTPException(status_code=400, detail="Only CSV files are accepted")
+
+    raw_bytes = await file.read()
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    text = raw_bytes.decode("utf-8-sig", errors="replace")
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV header row is missing")
+
+    def pick(row: dict, *keys: str) -> str:
+        for k in keys:
+            if k in row and _safe_str(row.get(k)):
+                return _safe_str(row.get(k))
+        return ""
+
+    errors: list[dict] = []
+    valid_jobs: list[dict] = []
+
+    for i, row in enumerate(reader, start=2):
+        title = pick(row, "title", "Job Title", "job_title")
+        company = pick(row, "company", "Company")
+        if not title or not company:
+            if len(errors) < 200:
+                errors.append({"row_index": i, "message": "Missing required fields: title and company"})
+            continue
+
+        location = pick(row, "location", "Location", "city")
+        country = pick(row, "country", "Country")
+        work_type = pick(row, "work_type", "Work Type")
+        salary = pick(row, "salary", "Salary")
+        experience = pick(row, "experience", "Experience")
+        industry = pick(row, "industry", "Industry")
+        description = pick(row, "description", "Job Description")
+        external_url = pick(row, "external_url", "External URL", "url")
+        posting_date = pick(row, "posting_date", "Posting Date", "created")
+        skills_raw = pick(row, "skills", "Skills")
+
+        skills = _parse_skills(skills_raw)
+        job_key = _compute_job_key(
+            source="admin_upload",
+            title=title,
+            company=company,
+            location=location,
+            country=country,
+            external_url=external_url,
+        )
+        job_id = hashlib.md5(job_key.encode("utf-8")).hexdigest()[:16]
+
+        valid_jobs.append(
+            {
+                "job_key": job_key,
+                "job_id": job_id,
+                "title": title,
+                "company": company,
+                "location": location,
+                "country": country,
+                "work_type": work_type,
+                "salary": salary,
+                "experience": experience,
+                "industry": industry,
+                "description": description,
+                "external_url": external_url,
+                "posting_date": posting_date,
+                "skills": skills[:30],
+                "benefits": [],
+            }
+        )
+
+    rows_total = max(0, (reader.line_num or 1) - 1)
+    rows_valid = len(valid_jobs)
+    rows_invalid = rows_total - rows_valid
+
+    if dry_run:
+        return {
+            "rows_total": rows_total,
+            "rows_valid": rows_valid,
+            "rows_invalid": rows_invalid,
+            "errors": errors,
+            "sample_valid": valid_jobs[:5],
+        }
+
+    created_by = _user_email_from_payload(token_payload)
+    now = datetime.utcnow().isoformat() + "Z"
+    inserted = 0
+    updated = 0
+    async with aiosqlite.connect(DB_PATH) as db:
+        for job in valid_jobs:
+            # Determine if this job already exists
+            async with db.execute("SELECT id FROM admin_jobs WHERE job_key = ?", (job["job_key"],)) as c:
+                existing = await c.fetchone()
+            if existing:
+                updated += 1
+            else:
+                inserted += 1
+
+            await db.execute(
+                "INSERT INTO admin_jobs (job_key, job_id, title, company, location, country, work_type, salary, experience, industry, description, external_url, posting_date, skills_json, benefits_json, status, created_by, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?) "
+                "ON CONFLICT(job_key) DO UPDATE SET "
+                "job_id=excluded.job_id, title=excluded.title, company=excluded.company, location=excluded.location, country=excluded.country, work_type=excluded.work_type, salary=excluded.salary, experience=excluded.experience, industry=excluded.industry, description=excluded.description, external_url=excluded.external_url, posting_date=excluded.posting_date, skills_json=excluded.skills_json, benefits_json=excluded.benefits_json, status='active', updated_at=excluded.updated_at",
+                (
+                    job["job_key"],
+                    job["job_id"],
+                    job["title"],
+                    job["company"],
+                    job["location"],
+                    job["country"],
+                    job["work_type"],
+                    job["salary"],
+                    job["experience"],
+                    job["industry"],
+                    job["description"],
+                    job["external_url"],
+                    job["posting_date"],
+                    json.dumps(job["skills"] or []),
+                    json.dumps(job["benefits"] or []),
+                    created_by,
+                    now,
+                    now,
+                ),
+            )
+        await db.commit()
+
+    _browse_cache["fetched_at"] = 0.0
+    return {"status": "ok", "inserted": inserted, "updated": updated, "rows_total": rows_total}
 
 
 # ── Serve frontend/ at / and /dashboard ───────────────────────────────────
