@@ -63,6 +63,85 @@ function authHeaders(extra = {}) {
   return AUTH.headers(extra);
 }
 
+function apiErrorMessage(payload, fallback) {
+  const detail = payload?.detail;
+  if (typeof detail === 'string') return detail;
+  if (detail?.message) return detail.message;
+  if (payload?.message) return payload.message;
+  return fallback;
+}
+
+const INR_FORMATTER = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
+
+function formatAmountINR(amount) {
+  const num = Number(amount);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  return `INR ${INR_FORMATTER.format(Math.round(num))}`;
+}
+
+function parseSalaryToken(token, forcedUnit = '') {
+  const raw = String(token || '').trim().toLowerCase().replace(/[, ]+/g, '');
+  const match = raw.match(/^(\d+(?:\.\d+)?)([kml])?$/i);
+  if (!match) return null;
+  const value = parseFloat(match[1]);
+  if (!Number.isFinite(value)) return null;
+  const unit = (match[2] || forcedUnit || '').toLowerCase();
+  if (unit === 'k') return value * 1000;
+  if (unit === 'm') return value * 1000000;
+  if (unit === 'l') return value * 100000;
+  return value;
+}
+
+function formatSalaryDisplay(rawSalary) {
+  const original = String(rawSalary || '').trim();
+  if (!original) return '';
+  const lower = original.toLowerCase();
+  if (/^(not listed|not specified|na|n\/a|competitive|negotiable)$/i.test(lower)) return original;
+
+  const normalized = original
+    .replace(/₹|rs\.?/gi, '')
+    .replace(/usd|us\$/gi, '')
+    .replace(/\$/g, '')
+    .replace(/inr/gi, '')
+    .trim();
+
+  if (!/\d/.test(normalized)) return original;
+
+  const isLakhContext = /(lpa|lakh|lac)/i.test(lower);
+  const period = /\b(month|monthly|per month|\/month)\b/i.test(lower)
+    ? '/month'
+    : /\b(day|daily|per day|\/day)\b/i.test(lower)
+      ? '/day'
+      : /\b(hour|hourly|per hour|\/hr|\/hour)\b/i.test(lower)
+        ? '/hour'
+        : /\b(year|yearly|annum|annual|pa|p\.a\.|\/yr|\/year)\b/i.test(lower)
+          ? '/yr'
+          : '';
+
+  const rangeMatch = normalized.match(/(\d[\d,]*(?:\.\d+)?\s*[kml]?)\s*(?:-|–|to)\s*(\d[\d,]*(?:\.\d+)?\s*[kml]?)/i);
+  if (rangeMatch) {
+    const unitHint = isLakhContext ? 'l' : '';
+    const lo = parseSalaryToken(rangeMatch[1], unitHint);
+    const hi = parseSalaryToken(rangeMatch[2], unitHint);
+    if (lo && hi) {
+      const loText = formatAmountINR(lo);
+      const hiText = formatAmountINR(hi);
+      return `${loText} - ${hiText}${period}`;
+    }
+  }
+
+  const singleMatch = normalized.match(/(\d[\d,]*(?:\.\d+)?\s*[kml]?)/i);
+  if (singleMatch) {
+    const amount = parseSalaryToken(singleMatch[1], isLakhContext ? 'l' : '');
+    if (amount) return `${formatAmountINR(amount)}${period}`;
+  }
+
+  if (/\$/.test(original) || /usd/i.test(original)) {
+    return original.replace(/\$/g, 'INR ');
+  }
+  return original;
+}
+
 function setAuthStatus(msg) {
   const el = document.getElementById('auth-status');
   if (el) el.textContent = msg || '';
@@ -571,13 +650,36 @@ async function checkEmailServiceStatus() {
 
 // ─── DARK MODE TOGGLE ────────────────────────────────
 const darkModeToggle = document.getElementById('darkModeToggle');
-if (localStorage.getItem('jobmatch_dark') === '1') {
-  document.documentElement.setAttribute('data-theme', 'dark');
+const THEME_STORAGE_KEY = 'jobmatch_dark';
+const systemDarkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+
+function applyTheme(theme) {
+  const nextTheme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', nextTheme);
+  if (darkModeToggle) {
+    darkModeToggle.setAttribute('aria-pressed', nextTheme === 'dark' ? 'true' : 'false');
+    darkModeToggle.title = nextTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+  }
 }
+
+const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+if (savedTheme === '1') applyTheme('dark');
+else if (savedTheme === '0') applyTheme('light');
+else applyTheme(systemDarkQuery?.matches ? 'dark' : 'light');
+
+if (systemDarkQuery && savedTheme === null) {
+  const onSystemThemeChange = (event) => applyTheme(event.matches ? 'dark' : 'light');
+  if (typeof systemDarkQuery.addEventListener === 'function') {
+    systemDarkQuery.addEventListener('change', onSystemThemeChange);
+  } else if (typeof systemDarkQuery.addListener === 'function') {
+    systemDarkQuery.addListener(onSystemThemeChange);
+  }
+}
+
 darkModeToggle?.addEventListener('click', () => {
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  document.documentElement.setAttribute('data-theme', isDark ? 'light' : 'dark');
-  localStorage.setItem('jobmatch_dark', isDark ? '0' : '1');
+  applyTheme(isDark ? 'light' : 'dark');
+  localStorage.setItem(THEME_STORAGE_KEY, isDark ? '0' : '1');
 });
 
 // ─── INITIALIZE DATALISTS ───────────────────────────
@@ -928,7 +1030,7 @@ async function handleResumeUpload(file) {
     }
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || `Server error ${res.status}`);
+      throw new Error(apiErrorMessage(d, `Server error ${res.status}`));
     }
     const data = await res.json();
 
@@ -1180,7 +1282,7 @@ function openJobDetailsModal(details) {
   }
   if (jobDetailsRole) jobDetailsRole.textContent = details.role || 'Not specified';
   if (jobDetailsLocation) jobDetailsLocation.textContent = details.location || 'Not specified';
-  if (jobDetailsSalary) jobDetailsSalary.textContent = details.salary || 'Not specified';
+  if (jobDetailsSalary) jobDetailsSalary.textContent = formatSalaryDisplay(details.salary) || 'Not specified';
   if (jobDetailsWhy) {
     const reasons = (details.why || '')
       .split('|')
@@ -1519,7 +1621,7 @@ async function generateCoverLetter(jobTitle, company, jobDescription, recruiterE
     });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || `Server error ${res.status}`);
+      throw new Error(apiErrorMessage(d, `Server error ${res.status}`));
     }
     const data = await res.json();
     const coverLetterText = (data.cover_letter || 'No cover letter generated.').trim();
@@ -1811,6 +1913,7 @@ function renderJobCard(job, rank) {
     if (linkMatch) applyLink = linkMatch[0];
   }
   const jobDescription = jobDescriptionParts.join(' ').trim();
+  salary = formatSalaryDisplay(salary);
 
   const score = parseInt(matchScore) || 0;
   const scoreClass = score >= 8 ? 'score-high' : score >= 6 ? 'score-mid' : 'score-low';
@@ -2191,7 +2294,7 @@ async function callEnhanceResume(file) {
     });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || `Server error ${res.status}`);
+      throw new Error(apiErrorMessage(d, `Server error ${res.status}`));
     }
     const data = await res.json();
     if (data.raw_text || data.resume_text) lastResumeText = data.raw_text || data.resume_text;
@@ -2657,7 +2760,7 @@ function renderApplicationCard(application, idx) {
   const bookmark = AppState.bookmarks.find((b) => sameJob(b.job_title, b.company, application.job_title, application.company));
   const jobData = bookmark?.job_data || {};
   const location = jobData.location || bookmark?.location || 'Not specified';
-  const salary = jobData.salary || bookmark?.salary || 'Not specified';
+  const salary = formatSalaryDisplay(jobData.salary || bookmark?.salary || '') || 'Not specified';
   const score = Number(jobData.match_score || bookmark?.match_score || 0);
   const scoreClass = score >= 7 ? 'score-high' : (score >= 4 ? 'score-mid' : 'score-low');
   const companyName = application.company || 'Company';
@@ -2798,6 +2901,7 @@ function closeAdminView() {
 
 function renderAdminJobCard(job, idx) {
   const locationDisplay = [job.location, job.country].filter(Boolean).join(', ');
+  const salaryDisplay = formatSalaryDisplay(job.salary || '');
   const delay = (idx % 20) * 0.04;
 
   return `
@@ -2811,7 +2915,7 @@ function renderAdminJobCard(job, idx) {
       <div class="bjc-meta">
         ${locationDisplay ? `<span class="bjc-chip bjc-chip-location">${esc(locationDisplay)}</span>` : ''}
         ${job.work_type ? `<span class="${workTypeChipClass(job.work_type)}">${esc(job.work_type)}</span>` : ''}
-        ${job.salary ? `<span class="bjc-chip bjc-chip-salary">💰 ${esc(job.salary)}</span>` : ''}
+        ${salaryDisplay ? `<span class="bjc-chip bjc-chip-salary">Salary: ${esc(salaryDisplay)}</span>` : ''}
       </div>
       ${job.description ? `<p class="bjc-desc">${esc(job.description)}</p>` : ''}
       <div class="admin-job-actions">
@@ -3279,6 +3383,7 @@ function renderBrowseJobCard(job, idx) {
   const isBookmarked = AppState.isBookmarked(job.title, job.company);
   const skills = Array.isArray(job.skills) ? job.skills.slice(0, 6) : [];
   const locationDisplay = [job.location, job.country].filter(Boolean).join(', ');
+  const salaryDisplay = formatSalaryDisplay(job.salary || '');
   const delay = (idx % 20) * 0.04;
 
   let html = `<article class="browse-job-card" style="animation-delay:${delay}s">`;
@@ -3294,7 +3399,7 @@ function renderBrowseJobCard(job, idx) {
       data-title="${esc(job.title)}"
       data-company="${esc(job.company)}"
       data-location="${esc(locationDisplay)}"
-      data-salary="${esc(job.salary || '')}"
+      data-salary="${esc(salaryDisplay)}"
       data-description="${esc((job.description || '').slice(0, 300))}"
       data-job-uid="${esc(job.job_uid || '')}"
       data-source="${esc(job.source || '')}"
@@ -3308,7 +3413,7 @@ function renderBrowseJobCard(job, idx) {
   html += `<div class="bjc-meta">`;
   if (locationDisplay) html += `<span class="bjc-chip bjc-chip-location"><svg width="11" height="11" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>${esc(locationDisplay)}</span>`;
   if (job.work_type) html += `<span class="${workTypeChipClass(job.work_type)}">${esc(job.work_type)}</span>`;
-  if (job.salary) html += `<span class="bjc-chip bjc-chip-salary">Salary: ${esc(job.salary)}</span>`;
+  if (salaryDisplay) html += `<span class="bjc-chip bjc-chip-salary">Salary: ${esc(salaryDisplay)}</span>`;
   if (job.posting_date) html += `<span class="bjc-chip">${esc(String(job.posting_date).slice(0, 10))}</span>`;
   html += `</div>`;
 

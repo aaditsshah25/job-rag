@@ -86,6 +86,11 @@ html {
   scroll-behavior: smooth;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
 }
 
 body {
@@ -3735,39 +3740,6 @@ body::after {
 .action-list li::before {
   background: var(--accent);
 }
-
-[data-theme="dark"] {
-  --bg-body: #0f172a;
-  --bg-card: #111827;
-  --bg-card-hover: #1f2937;
-  --bg-input: #111827;
-  --bg-section: #1f2937;
-  --bg-secondary: #1f2937;
-  --border-light: #374151;
-  --border-medium: #4b5563;
-
-  --accent: #2dd4bf;
-  --accent-hover: #14b8a6;
-  --accent-light: rgba(45, 212, 191, 0.14);
-  --accent-muted: rgba(45, 212, 191, 0.12);
-  --accent-text: #99f6e4;
-
-  --text-primary: #f9fafb;
-  --text-secondary: #d1d5db;
-  --text-muted: #9ca3af;
-}
-
-[data-theme="dark"] #app-header {
-  background: #111827;
-}
-
-[data-theme="dark"] .btn-secondary,
-[data-theme="dark"] .card-copy-btn {
-  background: var(--bg-section);
-  border-color: var(--border-light);
-  color: var(--text-secondary);
-}
-
 
 /* My Applications */
 .myapps-nav-btn {

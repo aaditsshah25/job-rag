@@ -52,6 +52,12 @@ from dotenv import load_dotenv
 import httpx as _httpx
 genai = None  # SDK not used; we call Gemini via REST
 _GENAI_AVAILABLE = True  # always available via HTTP
+try:
+    from openai import OpenAI
+    _OPENAI_AVAILABLE = True
+except Exception:
+    OpenAI = None  # type: ignore[assignment]
+    _OPENAI_AVAILABLE = False
 from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
 import aiosqlite
@@ -113,12 +119,14 @@ log = logging.getLogger(__name__)
 
 # ─── Config ───────────────────────────────────────────
 GOOGLE_API_KEY    = os.getenv("GOOGLE_API_KEY", "")
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
 PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY", "")
 PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
 VECTOR_DIM        = int(os.getenv("VECTOR_DIM", "1536"))
-EMBEDDING_PROVIDER = "local_hash_v1"
+EMBED_MODEL       = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small").strip() or "text-embedding-3-small"
+EMBEDDING_PROVIDER = f"openai:{EMBED_MODEL}"
 _DEFAULT_GEMMA_MODEL = "gemma-3-27b-it"
 _configured_chat_model = os.getenv("GEMMA_CHAT_MODEL", _DEFAULT_GEMMA_MODEL).strip() or _DEFAULT_GEMMA_MODEL
 CHAT_MODEL        = _configured_chat_model if _configured_chat_model.lower().startswith("gemma-") else _DEFAULT_GEMMA_MODEL
@@ -130,11 +138,15 @@ if CHAT_MODEL != _configured_chat_model:
     )
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
-ENABLE_LLM_JOB_RANKING = os.getenv("ENABLE_LLM_JOB_RANKING", "0").strip().lower() in {"1", "true", "yes", "on"}
+ENABLE_LLM_JOB_RANKING = os.getenv("ENABLE_LLM_JOB_RANKING", "true").strip().lower() not in {"0", "false", "no", "off"}
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
+JOBS_DATA_PATH    = os.getenv(
+    "JOBS_DATA_PATH",
+    os.path.join(os.path.dirname(__file__), "data", "adzuna_india_jobs_10000.jsonl")
+)
 CSV_PATH          = os.getenv(
     "CSV_PATH",
-    os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
+    os.path.join(os.path.dirname(__file__), "data", "adzuna_india_jobs_10000.csv")
 )
 _default_db_path = (
     "/tmp/jobmatch.db"
@@ -336,6 +348,7 @@ if CHAT_MODEL not in _KNOWN_GEMMA_MODELS:
 log.info("Gemma-only mode enabled. Using model: %s", CHAT_MODEL)
 
 # ─── Lazy singletons ──────────────────────────────────
+_openai_client = None
 _pc = None
 _last_source_stats: dict[str, object] = {
     "last_indexed_at": None,
@@ -345,6 +358,19 @@ _last_source_stats: dict[str, object] = {
     "source_counts": {},
     "external_total": 0,
 }
+
+def _gemma_job_results_enabled() -> bool:
+    return bool(GOOGLE_API_KEY and _GENAI_AVAILABLE and ENABLE_LLM_JOB_RANKING)
+
+def get_openai() -> OpenAI:
+    global _openai_client
+    if not _OPENAI_AVAILABLE or OpenAI is None:
+        raise RuntimeError("The openai package is not installed. Run pip install -r requirements.txt.")
+    if _openai_client is None:
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY is not set.")
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 
 def _gemini_http_generate(prompt: str, temperature: float = 0.3, max_tokens: int = 4096) -> str:
     """Call Gemini/Gemma via REST API (no SDK required)."""
@@ -1023,21 +1049,73 @@ def _contains_prompt_injection(value: str) -> bool:
     return any(re.search(pattern, text) for pattern in PROMPT_INJECTION_PATTERNS)
 
 
+def _format_indian_number(value: int) -> str:
+    sign = "-" if value < 0 else ""
+    digits = str(abs(int(value)))
+    if len(digits) <= 3:
+        return sign + digits
+    last_three = digits[-3:]
+    head = digits[:-3]
+    parts = []
+    while len(head) > 2:
+        parts.insert(0, head[-2:])
+        head = head[:-2]
+    if head:
+        parts.insert(0, head)
+    return sign + ",".join(parts + [last_three])
+
+
+def _parse_salary_amount(token: str, force_lakh: bool = False) -> int | None:
+    raw = _safe_str(token).strip().lower().replace(",", "")
+    if not raw:
+        return None
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*([kml])?$", raw)
+    if not m:
+        return None
+    value = float(m.group(1))
+    suffix = (m.group(2) or "").lower()
+    if suffix == "k":
+        value *= 1000
+    elif suffix == "m":
+        value *= 1000000
+    elif suffix == "l" or force_lakh:
+        value *= 100000
+    return int(round(value))
+
+
 def _parse_salary(raw: str) -> str:
     raw = _safe_str(raw)
     if not raw:
         return ""
-    raw = raw.replace("$", "").replace(",", "")
-    m = re.match(r"(\d+\.?\d*)[Kk]?\s*[-\u2013]\s*(\d+\.?\d*)[Kk]?", raw)
-    if m:
-        lo, hi = m.group(1), m.group(2)
-        if "K" in _safe_str(raw).upper():
-            lo = f"${int(float(lo) * 1000):,}"
-            hi = f"${int(float(hi) * 1000):,}"
-        else:
-            lo = f"${int(float(lo)):,}"
-            hi = f"${int(float(hi)):,}"
-        return f"{lo} \u2013 {hi}/yr"
+    text = raw.strip()
+    lower = text.lower()
+    period = "/yr" if re.search(r"\b(year|yearly|annum|annual|pa|p\.a\.)\b|/yr|/year", lower) else ""
+    if re.search(r"\b(month|monthly|per month)\b|/month", lower):
+        period = "/month"
+    elif re.search(r"\b(day|daily|per day)\b|/day", lower):
+        period = "/day"
+    elif re.search(r"\b(hour|hourly|per hour)\b|/hr|/hour", lower):
+        period = "/hour"
+
+    is_lakh_context = bool(re.search(r"\b(lpa|lakh|lakhs|lac|lacs)\b", lower))
+    normalized = re.sub(r"(inr|usd|us\$|rs\.?|₹|\$)", "", text, flags=re.IGNORECASE).strip()
+
+    range_match = re.search(
+        r"(\d[\d,]*(?:\.\d+)?\s*[kml]?)\s*(?:-|to|\u2013)\s*(\d[\d,]*(?:\.\d+)?\s*[kml]?)",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if range_match:
+        lo = _parse_salary_amount(range_match.group(1), force_lakh=is_lakh_context)
+        hi = _parse_salary_amount(range_match.group(2), force_lakh=is_lakh_context)
+        if lo and hi:
+            return f"INR {_format_indian_number(lo)} - INR {_format_indian_number(hi)}{period}"
+
+    single_match = re.search(r"(\d[\d,]*(?:\.\d+)?\s*[kml]?)", normalized, flags=re.IGNORECASE)
+    if single_match:
+        amount = _parse_salary_amount(single_match.group(1), force_lakh=is_lakh_context)
+        if amount:
+            return f"INR {_format_indian_number(amount)}{period}"
     return raw
 
 def _parse_experience(raw: str) -> str:
@@ -1812,6 +1890,7 @@ def _index_admin_jobs_incremental(jobs: list[dict]) -> int:
     index = get_or_create_index()
 
     vectors: list[dict] = []
+    chunk_records: list[tuple[dict, int, int, str, dict]] = []
     for job in jobs:
         chunks = _chunk_job_text(job)
         base_meta = {
@@ -1837,10 +1916,17 @@ def _index_admin_jobs_incremental(jobs: list[dict]) -> int:
             "external_url": job.get("external_url", ""),
         }
         for c_idx, chunk_text in enumerate(chunks):
-            emb = _hash_embed_text(chunk_text)
             base_id = _safe_str(job.get("job_id") or job.get("job_key", ""))
             vid = f"admin_{hashlib.md5(base_id.encode()).hexdigest()[:16]}_c{c_idx}"
-            meta = {**base_meta, "chunk_index": c_idx, "total_chunks": len(chunks)}
+            chunk_records.append((job, c_idx, len(chunks), vid, {**base_meta, "chunk_text": chunk_text}))
+
+    EMBED_BATCH = 96
+    for i in range(0, len(chunk_records), EMBED_BATCH):
+        batch = chunk_records[i: i + EMBED_BATCH]
+        embeddings = embed_texts([record[4]["chunk_text"] for record in batch])
+        for (_, c_idx, total_chunks, vid, meta), emb in zip(batch, embeddings):
+            meta = {k: v for k, v in meta.items() if k != "chunk_text"}
+            meta.update({"chunk_index": c_idx, "total_chunks": total_chunks})
             vectors.append({"id": vid, "values": emb, "metadata": meta})
 
     UPSERT_BATCH = 100
@@ -1919,7 +2005,19 @@ def get_or_create_index():
     return client.Index(PINECONE_INDEX)
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    return [_hash_embed_text(text) for text in texts]
+    if not texts:
+        return []
+    last_exc: Exception | None = None
+    for attempt in range(4):
+        try:
+            resp = get_openai().embeddings.create(model=EMBED_MODEL, input=texts)
+            return [r.embedding for r in resp.data]
+        except Exception as exc:
+            last_exc = exc
+            if attempt == 3:
+                break
+            time.sleep(2 ** attempt)
+    raise RuntimeError(f"OpenAI embedding request failed after retries: {last_exc}") from last_exc
 
 def index_dataset(force: bool = False) -> int:
     global _last_source_stats
@@ -1949,13 +2047,13 @@ def index_dataset(force: bool = False) -> int:
     mode = INDEX_MODE if INDEX_MODE in {"csv_only", "live_only", "hybrid"} else "hybrid"
     jobs: list[dict] = []
 
-    if mode in {"csv_only", "hybrid"} and _PANDAS_AVAILABLE:
-        log.info("Loading dataset from %s ...", CSV_PATH)
-        df = pd.read_csv(CSV_PATH)
-        log.info("Loaded %d CSV rows.", len(df))
-        jobs.extend(clean_row(df.iloc[i]) for i in range(len(df)))
-    elif mode in {"csv_only", "hybrid"}:
-        log.warning("Pandas not available; skipping CSV index load.")
+    if mode in {"csv_only", "hybrid"}:
+        csv_jobs = _load_adzuna_csv()
+        if csv_jobs:
+            log.info("Loaded %d CSV rows from %s.", len(csv_jobs), CSV_PATH)
+            jobs.extend(csv_jobs)
+        else:
+            log.warning("No CSV jobs loaded from %s.", CSV_PATH)
 
     source_cfg = get_source_config()
     source_counts: dict[str, int] = {}
@@ -2278,42 +2376,156 @@ def _extract_resume_basics(text: str) -> dict:
 
 
 def _resume_quality_report(text: str) -> dict:
-    """Detect whether extracted PDF text looks like an actual resume/CV."""
+    """Score whether extracted PDF text looks like an actual resume/CV.
+
+    This is intentionally a loose gate: it rejects obvious non-resumes before
+    job matching, but does not require every resume section to be present.
+    """
     raw = _safe_str(text)
     lower = raw.lower()
     words = re.findall(r"[a-zA-Z]{2,}", lower)
     unique_words = set(words)
     email = bool(re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", raw))
     phone = bool(re.search(r"(?:\+?\d[\s().-]*){8,}", raw))
-    section_hits = len(re.findall(
-        r"(?im)^\s*(experience|work experience|employment|education|skills|projects|certifications|summary|profile)\s*:?\s*$",
-        raw,
-    ))
-    education = bool(re.search(r"\b(bachelor|master|degree|university|college|school|mba|b\.?tech|m\.?tech|bsc|msc)\b", lower))
-    experience = bool(re.search(r"\b(intern|analyst|engineer|developer|manager|consultant|associate|worked|led|built|created|managed)\b", lower))
+    portfolio = bool(re.search(r"\b(linkedin|github|portfolio|behance|kaggle|personal website)\b|https?://", lower))
+
+    section_patterns = {
+        "education": r"education|academic background|qualifications",
+        "experience": r"experience|work experience|employment|internships?|professional experience",
+        "skills": r"skills|technical skills|core competencies|tools|tech stack",
+        "projects": r"projects?|portfolio projects?|academic projects?",
+        "certifications": r"certifications?|licenses?|courses?|training",
+        "profile": r"summary|profile|objective|career objective|about me",
+    }
+    matched_sections = sorted(
+        name
+        for name, pattern in section_patterns.items()
+        if re.search(rf"(?im)^\s*(?:{pattern})\s*:?\s*$", raw)
+    )
+
+    education = bool(re.search(r"\b(bachelor|master|degree|university|college|school|mba|b\.?tech|m\.?tech|bsc|msc|bba|ba|bs|ms)\b", lower))
+    experience = bool(re.search(r"\b(intern|internship|analyst|engineer|developer|manager|consultant|associate|worked|led|built|created|managed|designed|developed)\b", lower))
+    projects = bool(re.search(r"\b(project|capstone|dashboard|prototype|case study|built|developed|implemented)\b", lower))
+    certification = bool(re.search(r"\b(certified|certification|certificate|coursework|training)\b", lower))
+    year_signal = bool(re.search(r"\b(?:19|20)\d{2}\b|\b\d{1,2}\+?\s*(?:years?|yrs?)\b", lower))
     skill_hits = sum(1 for skill in KNOWN_PROFILE_SKILLS if skill in lower)
     role_hits = sum(1 for role in ROLE_KEYWORDS if role in lower)
     repeated_ratio = (len(unique_words) / max(len(words), 1)) if words else 0.0
 
-    signals = 0
-    signals += 1 if email else 0
-    signals += 1 if phone else 0
-    signals += min(section_hits, 3)
-    signals += 1 if education else 0
-    signals += 1 if experience else 0
-    signals += min(skill_hits, 3)
-    signals += min(role_hits, 2)
+    content_categories = set(matched_sections)
+    if education:
+        content_categories.add("education")
+    if experience or role_hits:
+        content_categories.add("experience")
+    if skill_hits >= 2:
+        content_categories.add("skills")
+    if projects:
+        content_categories.add("projects")
+    if certification:
+        content_categories.add("certifications")
+
+    score = 0
+    reasons: list[str] = []
+    penalties: list[str] = []
+
+    if email:
+        score += 2
+        reasons.append("email")
+    if phone:
+        score += 1
+        reasons.append("phone")
+    if portfolio:
+        score += 1
+        reasons.append("portfolio link")
+    if matched_sections:
+        section_score = min(len(matched_sections) * 2, 10)
+        score += section_score
+        reasons.append(f"resume section headings: {', '.join(matched_sections)}")
+    if education:
+        score += 2
+        reasons.append("education terms")
+    if experience:
+        score += 2
+        reasons.append("experience or internship terms")
+    if projects:
+        score += 2
+        reasons.append("project terms")
+    if certification:
+        score += 1
+        reasons.append("certification terms")
+    if year_signal:
+        score += 2
+        reasons.append("dates or years")
+    if skill_hits:
+        score += min(skill_hits, 6)
+        reasons.append(f"{min(skill_hits, 6)} skill keyword hits")
+    if role_hits:
+        score += min(role_hits, 3)
+        reasons.append(f"{min(role_hits, 3)} role keyword hits")
+
+    if len(words) < 18:
+        score -= 6
+        penalties.append("extremely short text")
+    elif len(words) < 45:
+        score -= 2
+        penalties.append("short text")
+    if words and repeated_ratio < 0.16:
+        score -= 4
+        penalties.append("highly repeated text")
+    elif words and repeated_ratio < 0.24:
+        score -= 2
+        penalties.append("some repeated text")
+    if not matched_sections and not (education or experience or projects or certification or skill_hits or role_hits):
+        score -= 3
+        penalties.append("no resume headings or career terms")
+
+    unrelated_patterns = {
+        "presentation": r"\b(slide|agenda|speaker notes|presentation|thank you slide|table of contents)\b",
+        "fiction": r"\b(chapter|novel|fiction|story|poem|character|plot)\b",
+        "source code": r"\b(function|class|import|console\.log|def |return true|public static void|<script)\b",
+        "recipe": r"\b(recipe|ingredients|serves|preheat|tablespoon|teaspoon)\b",
+        "academic paper": r"\b(abstract|methodology|literature review|references|bibliography)\b",
+    }
+    unrelated_hits = sorted(
+        label for label, pattern in unrelated_patterns.items()
+        if re.search(pattern, lower)
+    )
+    if unrelated_hits:
+        penalty = min(len(unrelated_hits) * 3, 6)
+        score -= penalty
+        penalties.append(f"unrelated document signals: {', '.join(unrelated_hits)}")
+
+    if _contains_prompt_injection(raw):
+        score -= 3
+        penalties.append("prompt-injection-like text")
+
+    accept_threshold = 9
+    uncertain_threshold = 5
+    enough_content = len(content_categories) >= 2
+    enough_text = len(words) >= 18 and repeated_ratio >= 0.16
+    obvious_non_resume = len(unrelated_hits) >= 2 or (len(unrelated_hits) == 1 and not enough_content)
 
     looks_like_resume = (
-        (len(words) >= 35 and signals >= 3 and repeated_ratio >= 0.18)
-        or (len(words) >= 20 and signals >= 7 and repeated_ratio >= 0.18)
+        score >= accept_threshold
+        and enough_content
+        and enough_text
+        and not obvious_non_resume
     )
+    verdict = "accept" if looks_like_resume else ("uncertain" if score >= uncertain_threshold else "reject")
 
     return {
         "looks_like_resume": looks_like_resume,
-        "signals": signals,
+        "signals": max(score, 0),
+        "score": score,
+        "accept_threshold": accept_threshold,
+        "uncertain_threshold": uncertain_threshold,
+        "verdict": verdict,
         "word_count": len(words),
         "unique_word_ratio": round(repeated_ratio, 3),
+        "matched_sections": matched_sections,
+        "content_categories": sorted(content_categories),
+        "reasons": reasons[:10],
+        "penalties": penalties[:10],
         "prompt_injection_detected": _contains_prompt_injection(raw),
     }
 
@@ -2321,10 +2533,14 @@ def _resume_quality_report(text: str) -> dict:
 def _validate_resume_text_or_raise(text: str):
     report = _resume_quality_report(text)
     if not report["looks_like_resume"]:
+        if report.get("verdict") == "uncertain":
+            message = "We could not confidently detect this as a resume. Please upload a resume file or continue with manual profile entry."
+        else:
+            message = "The uploaded PDF does not look like a resume. Please upload a resume with education, projects, skills, internships, work history, or contact details."
         raise HTTPException(
             status_code=422,
             detail={
-                "message": "The uploaded PDF does not look like a resume. Please upload a resume with experience, education, skills, or contact details.",
+                "message": message,
                 "quality": report,
             },
         )
@@ -2738,15 +2954,15 @@ def _is_renderable_jobmatch_output(text: str) -> bool:
 
 
 def generate_response(user_query: str, candidates: list[dict], history: list = None, resume_text: str = "") -> str:
-    ranked_candidates = rank_candidates_deterministically(user_query, candidates)
-    if not GOOGLE_API_KEY or not _GENAI_AVAILABLE or not ENABLE_LLM_JOB_RANKING:
+    if not _gemma_job_results_enabled():
+        ranked_candidates = rank_candidates_deterministically(user_query, candidates)
         return _basic_jobmatch_markdown(
             ranked_candidates,
             "Results use deterministic retrieval ranking for repeatable job matches.",
         )
 
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
-    user_msg = build_llm_prompt(_clean_untrusted_text(user_query, 2400), ranked_candidates[:10], resume_text=resume_text)
+    user_msg = build_llm_prompt(_clean_untrusted_text(user_query, 2400), candidates[:10], resume_text=resume_text)
     full_prompt = f"{system}\n\n{user_msg}"
     # Gemma 4 uses a reasoning/thinking mode and needs more tokens (thinking + output)
     max_tokens = 4096 if CHAT_MODEL in _GEMMA4_MODELS else 1500
@@ -2755,6 +2971,7 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
         text = (text or "").strip()
     except Exception as exc:
         log.warning("Gemini/Gemma generation failed (%s: %s), falling back to deterministic response", type(exc).__name__, exc)
+        ranked_candidates = rank_candidates_deterministically(user_query, candidates)
         return _basic_jobmatch_markdown(
             ranked_candidates,
             "AI ranking is temporarily unavailable, so these results use deterministic retrieval ranking.",
@@ -2771,6 +2988,7 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
 
     if not _is_renderable_jobmatch_output(text):
         log.warning("Gemini/Gemma output was not renderable by frontend parser; using deterministic fallback.")
+        ranked_candidates = rank_candidates_deterministically(user_query, candidates)
         return _basic_jobmatch_markdown(
             ranked_candidates,
             "AI output format was inconsistent, so a reliable fallback format was used.",
@@ -2786,6 +3004,7 @@ async def health():
         "version": "2.0.0",
         "chat_model": CHAT_MODEL,
         "gemma_only": True,
+        "gemma_job_results_enabled": _gemma_job_results_enabled(),
         "embedding_provider": EMBEDDING_PROVIDER,
     }
 
@@ -2815,6 +3034,8 @@ async def readiness():
         "openai_configured": bool(OPENAI_API_KEY),
         "google_configured": bool(GOOGLE_API_KEY),
         "pinecone_configured": bool(PINECONE_API_KEY),
+        "gemma_job_results_enabled": _gemma_job_results_enabled(),
+        "llm_job_ranking_configured": ENABLE_LLM_JOB_RANKING,
         "pinecone_ok": pinecone_ok,
         "pinecone_error": pinecone_error,
         "csv_rows": csv_rows,
@@ -2965,11 +3186,12 @@ async def debug_rag_trace(request: Request, req: DebugRetrievalRequest):
     query = canonicalize_job_query(raw_query)
     top_k = max(1, min(int(req.topK or TOP_K), 50))
     profile_salary_min = req.profile.salaryMin if req.profile else None
-    candidates = rank_candidates_deterministically(
-        query,
-        search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min),
-    )
-    prompt = build_llm_prompt(query, candidates)
+    candidates = search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min)
+    if req.profile:
+        candidates = _rerank_candidates(candidates, req.profile)
+    if not _gemma_job_results_enabled():
+        candidates = rank_candidates_deterministically(query, candidates)
+    prompt = build_llm_prompt(query, candidates, resume_text=(req.profile.resumeText if req.profile else ""))
 
     tokens = set(_tokenize_query(query))
     traced = []
@@ -3004,7 +3226,8 @@ async def debug_rag_trace(request: Request, req: DebugRetrievalRequest):
         "prompt_version": "jobmatch_markdown_v2",
         "chat_model": CHAT_MODEL,
         "embedding_provider": EMBEDDING_PROVIDER,
-        "llm_job_ranking_enabled": ENABLE_LLM_JOB_RANKING,
+        "llm_job_ranking_enabled": _gemma_job_results_enabled(),
+        "llm_job_ranking_configured": ENABLE_LLM_JOB_RANKING,
         "prompt_injection_detected": _contains_prompt_injection(raw_query),
         "retrieval_fingerprint": _retrieval_fingerprint(candidates),
         "retrieved_count": len(candidates),
@@ -4113,15 +4336,36 @@ def _fetch_all_jobs_from_pinecone() -> list[dict]:
 
 def _load_adzuna_csv() -> list[dict]:
     """Load the Adzuna live jobs CSV which has pre-normalised column names."""
-    if not _PANDAS_AVAILABLE:
+    candidate_paths = [
+        JOBS_DATA_PATH,
+        CSV_PATH,
+        os.path.join(os.path.dirname(__file__), "data", "adzuna_india_jobs_10000.jsonl"),
+        os.path.join(os.path.dirname(__file__), "data", "adzuna_india_jobs_10000.csv"),
+        os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv"),
+    ]
+    adzuna_path = next((p for p in candidate_paths if p and os.path.isfile(p)), "")
+    if not adzuna_path:
         return []
-    adzuna_path = os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
-    if not os.path.isfile(adzuna_path):
-        return []
-    df = pd.read_csv(adzuna_path)
+
     jobs = []
-    for i in range(len(df)):
-        row = df.iloc[i]
+    if adzuna_path.lower().endswith(".jsonl"):
+        with open(adzuna_path, encoding="utf-8") as fh:
+            rows = [json.loads(line) for line in fh if line.strip()]
+        for row in rows:
+            job = _normalize_job_record(row, default_source="adzuna")
+            if not job["skills"]:
+                job["skills"] = _extract_skills_from_text(f"{job['description']} {job['responsibilities']}")
+            jobs.append(job)
+        return [j for j in jobs if j["title"]]
+
+    if _PANDAS_AVAILABLE:
+        df = pd.read_csv(adzuna_path)
+        rows = [df.iloc[i] for i in range(len(df))]
+    else:
+        with open(adzuna_path, newline="", encoding="utf-8-sig") as fh:
+            rows = list(csv.DictReader(fh))
+
+    for row in rows:
         skills_raw = _safe_str(row.get("skills", "[]"))
         try:
             import ast as _ast
