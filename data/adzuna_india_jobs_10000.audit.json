@@ -1,0 +1,297 @@
+{
+  "generated_at": "2026-04-22T13:34:55.831473+00:00",
+  "input_rows": 10000,
+  "output_rows": 8861,
+  "removed_rows_total": 1139,
+  "removed_duplicate_semantic_rows": 1138,
+  "removed_non_india_rows": 0,
+  "removed_non_tech_rows": 1,
+  "remaining_duplicate_job_ids": 0,
+  "remaining_duplicate_semantic_rows": 0,
+  "remaining_non_india_rows": 0,
+  "remaining_non_tech_rows": 0,
+  "countries": [
+    [
+      "in",
+      8861
+    ]
+  ],
+  "industries": [
+    [
+      "IT Jobs",
+      8237
+    ],
+    [
+      "Engineering Jobs",
+      208
+    ],
+    [
+      "Sales Jobs",
+      188
+    ],
+    [
+      "Consultancy Jobs",
+      42
+    ],
+    [
+      "HR & Recruitment Jobs",
+      32
+    ],
+    [
+      "Teaching Jobs",
+      26
+    ],
+    [
+      "Scientific & QA Jobs",
+      22
+    ],
+    [
+      "Accounting & Finance Jobs",
+      18
+    ],
+    [
+      "PR, Advertising & Marketing Jobs",
+      16
+    ],
+    [
+      "Creative & Design Jobs",
+      12
+    ],
+    [
+      "Healthcare & Nursing Jobs",
+      12
+    ],
+    [
+      "Trade & Construction Jobs",
+      7
+    ],
+    [
+      "Admin Jobs",
+      6
+    ],
+    [
+      "Manufacturing Jobs",
+      6
+    ],
+    [
+      "Hospitality & Catering Jobs",
+      5
+    ],
+    [
+      "Property Jobs",
+      5
+    ],
+    [
+      "Energy, Oil & Gas Jobs",
+      3
+    ],
+    [
+      "Retail Jobs",
+      3
+    ],
+    [
+      "Customer Services Jobs",
+      3
+    ],
+    [
+      "Legal Jobs",
+      3
+    ],
+    [
+      "Logistics & Warehouse Jobs",
+      3
+    ],
+    [
+      "Other/General Jobs",
+      2
+    ],
+    [
+      "Maintenance Jobs",
+      1
+    ],
+    [
+      "Travel Jobs",
+      1
+    ]
+  ],
+  "sources": [
+    [
+      "adzuna",
+      8861
+    ]
+  ],
+  "duplicate_rule": "Removed repeated normalized title + company + location + first 700 normalized description characters; kept latest posting_date, then most complete record.",
+  "scope_rule": "Kept India rows that are IT Jobs or whose title/role/description contains tech-role terms.",
+  "removed_non_tech_examples": [
+    {
+      "job_id": "5691266211",
+      "title": "Sales Development Manager",
+      "company": "Weekday AI",
+      "location": "India",
+      "industry": "Sales Jobs",
+      "external_url": "https://www.adzuna.in/details/5691266211?utm_medium=api&utm_source=763b212a"
+    }
+  ],
+  "removed_duplicate_examples": [
+    {
+      "job_id": "5663139905",
+      "title": "Lead Software Engineer",
+      "company": "FM India",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-03-13T07:46:50Z",
+      "external_url": "https://www.adzuna.in/land/ad/5663139905?se=8K4zyyY-8RGhPddyWOOaBA&utm_medium=api&utm_source=763b212a&v=454BB1A1F4A18FB08D9A454D8DFF8DD0277DA358"
+    },
+    {
+      "job_id": "5644503539",
+      "title": "Staff Engineer Software",
+      "company": "Albertsons Companies India",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-02-25T10:36:16Z",
+      "external_url": "https://www.adzuna.in/land/ad/5644503539?se=ECtq1SY-8RGbpohbJFrlgw&utm_medium=api&utm_source=763b212a&v=9DF71EBD3455A5807192CF505961F281254C5C32"
+    },
+    {
+      "job_id": "5653289438",
+      "title": "Staff Engineer Software",
+      "company": "Albertsons Companies India",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-03-04T11:04:01Z",
+      "external_url": "https://www.adzuna.in/land/ad/5653289438?se=ECtq1SY-8RGbpohbJFrlgw&utm_medium=api&utm_source=763b212a&v=21DEC8792B0353CC787C147A9780331AA32C25A2"
+    },
+    {
+      "job_id": "5653289427",
+      "title": "Advanced Engineer Software",
+      "company": "Albertsons Companies India",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-03-04T11:03:58Z",
+      "external_url": "https://www.adzuna.in/land/ad/5653289427?se=ECtq1SY-8RGbpohbJFrlgw&utm_medium=api&utm_source=763b212a&v=7ECC5B89226F29316110B90F2FAAD3D18D008B58"
+    },
+    {
+      "job_id": "5688978680",
+      "title": "Software Engineer",
+      "company": "KLA",
+      "location": "India",
+      "posting_date": "2026-04-04T01:48:37Z",
+      "external_url": "https://www.adzuna.in/details/5688978680?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5556437472",
+      "title": "Software Engineer",
+      "company": "KLA",
+      "location": "India",
+      "posting_date": "2025-12-27T00:30:15Z",
+      "external_url": "https://www.adzuna.in/details/5556437472?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5536716638",
+      "title": "Software Engineer",
+      "company": "KLA",
+      "location": "India",
+      "posting_date": "2025-12-11T00:35:48Z",
+      "external_url": "https://www.adzuna.in/details/5536716638?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5652779506",
+      "title": "Software Engineer",
+      "company": "KLA",
+      "location": "India",
+      "posting_date": "2026-03-04T01:40:14Z",
+      "external_url": "https://www.adzuna.in/details/5652779506?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5667923671",
+      "title": "Software Engineer",
+      "company": "Maersk",
+      "location": "India",
+      "posting_date": "2026-03-16T01:40:34Z",
+      "external_url": "https://www.adzuna.in/details/5667923671?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5629006357",
+      "title": "Software Engineer",
+      "company": "symplr",
+      "location": "Hoodi, Bangalore",
+      "posting_date": "2026-02-14T08:32:43Z",
+      "external_url": "https://www.adzuna.in/details/5629006357?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5646545108",
+      "title": "Software Engineer",
+      "company": "Solera",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-02-27T01:48:09Z",
+      "external_url": "https://www.adzuna.in/details/5646545108?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5576321605",
+      "title": "Software Engineer",
+      "company": "Solera",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-01-10T00:22:50Z",
+      "external_url": "https://www.adzuna.in/details/5576321605?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5653981018",
+      "title": "Software Engineer",
+      "company": "Solera",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-03-05T01:34:50Z",
+      "external_url": "https://www.adzuna.in/details/5653981018?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5672578121",
+      "title": "Software Engineer",
+      "company": "Teradata",
+      "location": "Hyderabad, Telangana",
+      "posting_date": "2026-03-20T06:08:39Z",
+      "external_url": "https://www.adzuna.in/details/5672578121?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5703885621",
+      "title": "Software Engineer",
+      "company": "Anaplan",
+      "location": "India",
+      "posting_date": "2026-04-19T01:57:41Z",
+      "external_url": "https://www.adzuna.in/details/5703885621?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5679804086",
+      "title": "Software Engineer",
+      "company": "PHOTON",
+      "location": "Bangalore, Karnataka",
+      "posting_date": "2026-03-27T06:28:01Z",
+      "external_url": "https://www.adzuna.in/details/5679804086?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5703823464",
+      "title": "Software Engineer",
+      "company": "Barclays",
+      "location": "India",
+      "posting_date": "2026-04-19T01:48:55Z",
+      "external_url": "https://www.adzuna.in/details/5703823464?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5689115429",
+      "title": "Software Engineer",
+      "company": "Barclays",
+      "location": "India",
+      "posting_date": "2026-04-04T02:08:32Z",
+      "external_url": "https://www.adzuna.in/details/5689115429?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5689124340",
+      "title": "Software Engineer",
+      "company": "Barclays",
+      "location": "India",
+      "posting_date": "2026-04-04T02:09:35Z",
+      "external_url": "https://www.adzuna.in/details/5689124340?utm_medium=api&utm_source=763b212a"
+    },
+    {
+      "job_id": "5696031147",
+      "title": "software engineer",
+      "company": "Barclays",
+      "location": "India",
+      "posting_date": "2026-04-11T02:11:08Z",
+      "external_url": "https://www.adzuna.in/details/5696031147?utm_medium=api&utm_source=763b212a"
+    }
+  ]
+}
