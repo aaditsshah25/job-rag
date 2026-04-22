@@ -18,6 +18,7 @@ cp .env.example .env
 - `PINECONE_API_KEY`
 - `JOBMATCH_API_KEY` (recommended)
 - Optional: `GEMMA_CHAT_MODEL` (defaults to `gemma-3-27b-it`)
+- Optional (Admin panel): `ADMIN_EMAILS` (comma-separated allowlist)
 
 Gemma-only mode is enforced. Non-Gemma model names are ignored.
 
@@ -77,6 +78,11 @@ curl -X POST "http://localhost:8000/index?force=true" -H "X-Api-Key: <JOBMATCH_A
 | `POST` | `/feedback` | Store user feedback |
 | `POST` | `/send-results` | Email results via Resend |
 | `POST` | `/auth/google` | Exchange Google credential for JWT |
+| `GET` | `/admin/me` | Admin allowlist check (JWT required) |
+| `GET` | `/admin/jobs/blocked` | List blocked jobs |
+| `POST` | `/admin/jobs/block` | Block a job by `job_key` |
+| `DELETE` | `/admin/jobs/block/{job_key}` | Restore a blocked job |
+| `POST` | `/admin/jobs/upload` | Upload jobs CSV (dry-run/commit) |
 
 All protected endpoints require `X-Api-Key` when `JOBMATCH_API_KEY` is set.
 

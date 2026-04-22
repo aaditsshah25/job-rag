@@ -97,6 +97,8 @@ function showAppAfterAuth(user) {
   document.getElementById('app-shell')?.classList.remove('hidden');
   updateHeaderAccount(user);
 
+  checkAdminAccess().catch(() => {});
+
   const emailField = document.getElementById('email');
   const nameField = document.getElementById('fullName');
   if (emailField && !emailField.value && user?.email) emailField.value = user.email;
@@ -135,6 +137,8 @@ function signOut() {
   setLandingHidden(false);
   document.getElementById('app-shell')?.classList.add('hidden');
   document.getElementById('accountChip')?.classList.add('hidden');
+  document.getElementById('adminPanelBtn')?.classList.add('hidden');
+  closeAdminView();
   AppState.bookmarks = [];
   AppState.applications = [];
   updateApplicationsBadge();
@@ -157,6 +161,30 @@ function handleAuthFailure(message = 'Your session expired. Please sign in again
   signOut();
   setAuthStatus(message);
   revealAuthGate({ scroll: false });
+}
+
+async function checkAdminAccess() {
+  const btn = document.getElementById('adminPanelBtn');
+  if (!btn) return false;
+  btn.classList.add('hidden');
+
+  if (!AUTH.isAuthenticated()) return false;
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/me`, {
+      method: 'GET',
+      headers: authHeaders(),
+    });
+    if (res.status === 401) {
+      handleAuthFailure('Session expired. Please sign in again.');
+      return false;
+    }
+    if (!res.ok) return false;
+    btn.classList.remove('hidden');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function resolveGoogleClientId() {
@@ -2407,6 +2435,7 @@ const homeBtn = document.getElementById('homeBtn');
 function goHomeToResumeUpload() {
   closeBrowseJobsView();
   closeMyApplicationsView();
+  closeAdminView();
   profilePanel?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
@@ -2436,6 +2465,8 @@ function statusBadgeClass(status) {
 function openMyApplicationsView() {
   if (!appMain || !myApplicationsPanel || !profilePanel || !resultsPanel) return;
   appMain.classList.add('myapps-open');
+  browseJobsPanel?.classList.add('hidden');
+  adminPanel?.classList.add('hidden');
   profilePanel.classList.add('hidden');
   resultsPanel.classList.add('hidden');
   myApplicationsPanel.classList.remove('hidden');
@@ -2690,6 +2721,7 @@ let browseState = { page: 0, q: '', location: '', industry: '', loading: false }
 function openBrowseJobsView() {
   if (!appMain || !browseJobsPanel || !profilePanel || !resultsPanel) return;
   myApplicationsPanel?.classList.add('hidden');
+  adminPanel?.classList.add('hidden');
   appMain.classList.add('myapps-open'); // reuse full-width layout class
   profilePanel.classList.add('hidden');
   resultsPanel.classList.add('hidden');
@@ -2703,6 +2735,435 @@ function closeBrowseJobsView() {
   profilePanel.classList.remove('hidden');
   resultsPanel.classList.remove('hidden');
 }
+
+// ─── ADMIN VIEW ─────────────────────────────────────
+const adminPanel = document.getElementById('adminPanel');
+const adminPanelBtn = document.getElementById('adminPanelBtn');
+const backFromAdminBtn = document.getElementById('backFromAdminBtn');
+
+const adminTabActive = document.getElementById('adminTabActive');
+const adminTabBlocked = document.getElementById('adminTabBlocked');
+const adminTabUpload = document.getElementById('adminTabUpload');
+
+const adminActiveView = document.getElementById('adminActiveView');
+const adminBlockedView = document.getElementById('adminBlockedView');
+const adminUploadView = document.getElementById('adminUploadView');
+
+let adminActiveState = { page: 0, q: '', location: '', loading: false };
+let adminBlockedState = { page: 0, loading: false };
+
+function setAdminTab(tab) {
+  const tabs = [
+    { key: 'active', btn: adminTabActive, view: adminActiveView },
+    { key: 'blocked', btn: adminTabBlocked, view: adminBlockedView },
+    { key: 'upload', btn: adminTabUpload, view: adminUploadView },
+  ];
+  tabs.forEach((t) => {
+    t.btn?.classList.toggle('active', t.key === tab);
+    t.view?.classList.toggle('hidden', t.key !== tab);
+  });
+}
+
+function openAdminView() {
+  if (!appMain || !adminPanel || !profilePanel || !resultsPanel) return;
+  browseJobsPanel?.classList.add('hidden');
+  myApplicationsPanel?.classList.add('hidden');
+  appMain.classList.add('myapps-open');
+  profilePanel.classList.add('hidden');
+  resultsPanel.classList.add('hidden');
+  adminPanel.classList.remove('hidden');
+  setAdminTab('active');
+}
+
+function closeAdminView() {
+  if (!appMain || !adminPanel || !profilePanel || !resultsPanel) return;
+  adminPanel.classList.add('hidden');
+  appMain.classList.remove('myapps-open');
+  profilePanel.classList.remove('hidden');
+  resultsPanel.classList.remove('hidden');
+}
+
+function renderAdminJobCard(job, idx) {
+  const locationDisplay = [job.location, job.country].filter(Boolean).join(', ');
+  const delay = (idx % 20) * 0.04;
+
+  return `
+    <article class="admin-job-card" style="animation-delay:${delay}s">
+      <div class="bjc-top">
+        <div class="bjc-title-block">
+          <h3 class="bjc-title" title="${esc(job.title || '')}">${esc(job.title || 'Untitled role')}</h3>
+          ${job.company ? `<div class="bjc-company">${esc(job.company)}</div>` : ''}
+        </div>
+      </div>
+      <div class="bjc-meta">
+        ${locationDisplay ? `<span class="bjc-chip bjc-chip-location">${esc(locationDisplay)}</span>` : ''}
+        ${job.work_type ? `<span class="${workTypeChipClass(job.work_type)}">${esc(job.work_type)}</span>` : ''}
+        ${job.salary ? `<span class="bjc-chip bjc-chip-salary">💰 ${esc(job.salary)}</span>` : ''}
+      </div>
+      ${job.description ? `<p class="bjc-desc">${esc(job.description)}</p>` : ''}
+      <div class="admin-job-actions">
+        ${job.external_url ? `<a class="bjc-apply-btn" href="${esc(job.external_url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ''}
+        <button class="btn-secondary admin-danger-btn" type="button"
+          data-admin-remove
+          data-job-key="${esc(job.job_key || '')}"
+          data-title="${esc(job.title || '')}"
+          data-company="${esc(job.company || '')}"
+          data-location="${esc(locationDisplay)}"
+          data-source="${esc(job.source || '')}"
+          data-external-url="${esc(job.external_url || '')}">Remove</button>
+      </div>
+    </article>
+  `;
+}
+
+async function fetchAndRenderAdminActiveJobs() {
+  if (adminActiveState.loading) return;
+  adminActiveState.loading = true;
+
+  const stateEl = document.getElementById('adminActiveState');
+  const loadingEl = document.getElementById('adminActiveLoading');
+  const gridEl = document.getElementById('adminActiveGrid');
+  const paginEl = document.getElementById('adminActivePagination');
+  const pageInfo = document.getElementById('adminActivePageInfo');
+  const prevBtn = document.getElementById('adminActivePrevBtn');
+  const nextBtn = document.getElementById('adminActiveNextBtn');
+  const countEl = document.getElementById('adminActiveResultsCount');
+
+  stateEl?.classList.add('hidden');
+  gridEl?.classList.add('hidden');
+  paginEl?.classList.add('hidden');
+  if (countEl) countEl.classList.add('hidden');
+  loadingEl?.classList.remove('hidden');
+
+  const params = new URLSearchParams({ page: adminActiveState.page, page_size: 18 });
+  if (adminActiveState.q) params.set('q', adminActiveState.q);
+  if (adminActiveState.location) params.set('location', adminActiveState.location);
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/jobs/browse?${params}`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      if (res.status === 401) handleAuthFailure('Session expired. Please sign in again.');
+      throw new Error(payload.detail || `Server error ${res.status}`);
+    }
+    const data = await res.json();
+
+    loadingEl?.classList.add('hidden');
+
+    if (!data.jobs || data.jobs.length === 0) {
+      if (stateEl) {
+        stateEl.innerHTML = `<div class="state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></div><h3>No results found</h3><p>Try a different keyword or clear the filters.</p>`;
+        stateEl.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (countEl) {
+      countEl.textContent = `${data.total.toLocaleString()} job${data.total !== 1 ? 's' : ''} found`;
+      countEl.classList.remove('hidden');
+    }
+    if (gridEl) {
+      gridEl.innerHTML = data.jobs.map((job, i) => renderAdminJobCard(job, i)).join('');
+      gridEl.classList.remove('hidden');
+    }
+
+    const totalPages = Math.max(1, Math.ceil(data.total / 18));
+    const currentPage = data.page + 1;
+    if (paginEl && pageInfo && prevBtn && nextBtn) {
+      pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+      prevBtn.disabled = adminActiveState.page === 0;
+      nextBtn.disabled = !data.has_more;
+      paginEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    loadingEl?.classList.add('hidden');
+    if (stateEl) {
+      stateEl.innerHTML = `<div class="state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><h3>Failed to load jobs</h3><p>${esc(err.message)}</p>`;
+      stateEl.classList.remove('hidden');
+    }
+  } finally {
+    adminActiveState.loading = false;
+  }
+}
+
+async function fetchAndRenderAdminBlockedJobs() {
+  if (adminBlockedState.loading) return;
+  adminBlockedState.loading = true;
+
+  const stateEl = document.getElementById('adminBlockedState');
+  const loadingEl = document.getElementById('adminBlockedLoading');
+  const listEl = document.getElementById('adminBlockedList');
+  const paginEl = document.getElementById('adminBlockedPagination');
+  const pageInfo = document.getElementById('adminBlockedPageInfo');
+  const prevBtn = document.getElementById('adminBlockedPrevBtn');
+  const nextBtn = document.getElementById('adminBlockedNextBtn');
+
+  stateEl?.classList.add('hidden');
+  listEl?.classList.add('hidden');
+  paginEl?.classList.add('hidden');
+  loadingEl?.classList.remove('hidden');
+
+  const params = new URLSearchParams({ page: adminBlockedState.page, page_size: 50 });
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/jobs/blocked?${params}`, {
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      if (res.status === 401) handleAuthFailure('Session expired. Please sign in again.');
+      throw new Error(payload.detail || `Server error ${res.status}`);
+    }
+    const data = await res.json();
+    loadingEl?.classList.add('hidden');
+
+    const items = Array.isArray(data.items) ? data.items : [];
+    if (items.length === 0) {
+      if (stateEl) {
+        stateEl.innerHTML = `<div class="state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M4.93 4.93l14.14 14.14"/></svg></div><h3>No blocked jobs</h3><p>You're all set.</p>`;
+        stateEl.classList.remove('hidden');
+      }
+      return;
+    }
+
+    if (listEl) {
+      listEl.innerHTML = items.map((it) => {
+        const title = it.title || 'Untitled role';
+        const company = it.company || '';
+        const meta = [company, it.location].filter(Boolean).join(' • ');
+        return `
+          <div class="admin-blocked-item">
+            <div class="admin-blocked-meta">
+              <h4 title="${esc(title)}">${esc(title)}</h4>
+              <p title="${esc(meta)}">${esc(meta)}</p>
+            </div>
+            <div class="admin-job-actions">
+              <button class="btn-secondary" type="button" data-admin-restore data-job-key="${esc(it.job_key || '')}">Restore</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+      listEl.classList.remove('hidden');
+    }
+
+    if (paginEl && pageInfo && prevBtn && nextBtn) {
+      const totalPages = Math.max(1, Math.ceil((data.total || 0) / 50));
+      pageInfo.textContent = `Page ${adminBlockedState.page + 1} of ${totalPages}`;
+      prevBtn.disabled = adminBlockedState.page === 0;
+      nextBtn.disabled = !data.has_more;
+      paginEl.classList.remove('hidden');
+    }
+  } catch (err) {
+    loadingEl?.classList.add('hidden');
+    if (stateEl) {
+      stateEl.innerHTML = `<div class="state-icon"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></div><h3>Failed to load blocked jobs</h3><p>${esc(err.message)}</p>`;
+      stateEl.classList.remove('hidden');
+    }
+  } finally {
+    adminBlockedState.loading = false;
+  }
+}
+
+async function adminBlockJobFromButton(btn) {
+  const jobKey = btn.getAttribute('data-job-key') || '';
+  if (!jobKey) {
+    showToast('Missing job_key; cannot remove');
+    return;
+  }
+  if (!window.confirm('Remove this job from all user views?')) return;
+
+  btn.disabled = true;
+  try {
+    const body = {
+      job_key: jobKey,
+      reason: 'Removed by admin',
+      title: btn.getAttribute('data-title') || '',
+      company: btn.getAttribute('data-company') || '',
+      location: btn.getAttribute('data-location') || '',
+      source: btn.getAttribute('data-source') || '',
+      external_url: btn.getAttribute('data-external-url') || '',
+    };
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/jobs/block`, {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      if (res.status === 401) handleAuthFailure('Session expired. Please sign in again.');
+      throw new Error(payload.detail || `Server error ${res.status}`);
+    }
+    showToast('Job removed');
+    fetchAndRenderAdminActiveJobs();
+    fetchAndRenderAdminBlockedJobs();
+  } catch (err) {
+    showToast(err.message || 'Could not remove job');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function adminRestoreJob(jobKey) {
+  if (!jobKey) return;
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/jobs/block/${encodeURIComponent(jobKey)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      if (res.status === 401) handleAuthFailure('Session expired. Please sign in again.');
+      throw new Error(payload.detail || `Server error ${res.status}`);
+    }
+    showToast('Job restored');
+    fetchAndRenderAdminBlockedJobs();
+    fetchAndRenderAdminActiveJobs();
+  } catch (err) {
+    showToast(err.message || 'Could not restore job');
+  }
+}
+
+async function adminUploadCsv(dryRun) {
+  const fileInput = document.getElementById('adminUploadFile');
+  const statusEl = document.getElementById('adminUploadStatus');
+  const previewEl = document.getElementById('adminUploadPreview');
+  const file = fileInput?.files?.[0];
+  if (!file) {
+    if (statusEl) statusEl.textContent = 'Please choose a CSV file.';
+    return;
+  }
+
+  if (statusEl) statusEl.textContent = dryRun ? 'Previewing…' : 'Importing…';
+  if (previewEl) previewEl.innerHTML = '';
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const headers = AUTH.headers({ 'Content-Type': undefined });
+  delete headers['Content-Type'];
+
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/jobs/upload?dry_run=${dryRun ? 'true' : 'false'}`, {
+      method: 'POST',
+      headers,
+      body: formData,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401) handleAuthFailure('Session expired. Please sign in again.');
+      throw new Error(data.detail || `Server error ${res.status}`);
+    }
+
+    if (dryRun) {
+      if (statusEl) statusEl.textContent = `${data.rows_valid || 0} valid / ${data.rows_invalid || 0} invalid (of ${data.rows_total || 0})`;
+      const errors = Array.isArray(data.errors) ? data.errors : [];
+      const sample = Array.isArray(data.sample_valid) ? data.sample_valid : [];
+      if (previewEl) {
+        previewEl.innerHTML = `
+          ${errors.length ? `<div><strong>Errors (first ${errors.length})</strong><br>${errors.slice(0, 10).map(e => `Row ${esc(e.row_index)}: ${esc(e.message)}`).join('<br>')}</div>` : '<div><strong>No validation errors.</strong></div>'}
+          ${sample.length ? `<div style="margin-top:10px"><strong>Sample</strong><br>${sample.map(s => `${esc(s.title)} — ${esc(s.company)}`).join('<br>')}</div>` : ''}
+        `;
+      }
+    } else {
+      if (statusEl) statusEl.textContent = `Imported. Inserted ${data.inserted || 0}, updated ${data.updated || 0}.`;
+      showToast('Jobs imported');
+      fetchAndRenderAdminActiveJobs();
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message || 'Upload failed.';
+    showToast(err.message || 'Upload failed');
+  }
+}
+
+async function adminReindexNow() {
+  const statusEl = document.getElementById('adminUploadStatus');
+  if (statusEl) statusEl.textContent = 'Reindexing…';
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/index?force=true`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      if (res.status === 401) handleAuthFailure('Session expired. Please sign in again.');
+      throw new Error(data.detail || `Server error ${res.status}`);
+    }
+    if (statusEl) statusEl.textContent = `Reindex complete: ${data.indexed || 0} jobs.`;
+    showToast('Reindex complete');
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message || 'Reindex failed.';
+    showToast(err.message || 'Reindex failed');
+  }
+}
+
+adminPanelBtn?.addEventListener('click', async () => {
+  openAdminView();
+  await fetchAndRenderAdminActiveJobs();
+});
+
+backFromAdminBtn?.addEventListener('click', closeAdminView);
+
+adminTabActive?.addEventListener('click', async () => {
+  setAdminTab('active');
+  await fetchAndRenderAdminActiveJobs();
+});
+adminTabBlocked?.addEventListener('click', async () => {
+  setAdminTab('blocked');
+  await fetchAndRenderAdminBlockedJobs();
+});
+adminTabUpload?.addEventListener('click', () => {
+  setAdminTab('upload');
+});
+
+document.getElementById('adminActiveSearchBtn')?.addEventListener('click', () => {
+  adminActiveState.q = document.getElementById('adminActiveSearchInput')?.value.trim() || '';
+  adminActiveState.location = document.getElementById('adminActiveLocationInput')?.value.trim() || '';
+  adminActiveState.page = 0;
+  fetchAndRenderAdminActiveJobs();
+});
+
+document.getElementById('adminActiveClearBtn')?.addEventListener('click', () => {
+  const qEl = document.getElementById('adminActiveSearchInput');
+  const lEl = document.getElementById('adminActiveLocationInput');
+  if (qEl) qEl.value = '';
+  if (lEl) lEl.value = '';
+  adminActiveState = { page: 0, q: '', location: '', loading: false };
+  fetchAndRenderAdminActiveJobs();
+});
+
+document.getElementById('adminActivePrevBtn')?.addEventListener('click', () => {
+  if (adminActiveState.page > 0) { adminActiveState.page--; fetchAndRenderAdminActiveJobs(); }
+});
+
+document.getElementById('adminActiveNextBtn')?.addEventListener('click', () => {
+  adminActiveState.page++; fetchAndRenderAdminActiveJobs();
+});
+
+document.getElementById('adminActiveGrid')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-admin-remove]');
+  if (!btn) return;
+  adminBlockJobFromButton(btn);
+});
+
+document.getElementById('adminBlockedList')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-admin-restore]');
+  if (!btn) return;
+  adminRestoreJob(btn.getAttribute('data-job-key') || '');
+});
+
+document.getElementById('adminBlockedPrevBtn')?.addEventListener('click', () => {
+  if (adminBlockedState.page > 0) { adminBlockedState.page--; fetchAndRenderAdminBlockedJobs(); }
+});
+
+document.getElementById('adminBlockedNextBtn')?.addEventListener('click', () => {
+  adminBlockedState.page++; fetchAndRenderAdminBlockedJobs();
+});
+
+document.getElementById('adminUploadDryRunBtn')?.addEventListener('click', () => adminUploadCsv(true));
+document.getElementById('adminUploadImportBtn')?.addEventListener('click', () => adminUploadCsv(false));
+document.getElementById('adminReindexBtn')?.addEventListener('click', adminReindexNow);
 
 function workTypeChipClass(wt) {
   const v = (wt || '').toLowerCase();

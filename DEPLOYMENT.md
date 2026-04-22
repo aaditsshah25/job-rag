@@ -39,6 +39,7 @@ GitHub (aaditsshah25/job-rag)
 | `ADZUNA_APP_ID` | Adzuna API app ID | `763b212a` |
 | `ADZUNA_APP_KEY` | Adzuna API key | `...` |
 | `GOOGLE_CLIENT_ID` | Google OAuth client ID | `680440081699-...` |
+| `ADMIN_EMAILS` | Comma-separated allowlist of admin emails | `admin@company.com,ops@company.com` |
 
 ```
 ALLOWED_ORIGINS=https://jobmatch-ai-app.vercel.app,http://localhost:8000,http://127.0.0.1:8000

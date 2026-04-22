@@ -2370,10 +2370,15 @@ def search_jobs_cached(query: str, top_k: int = TOP_K, profile_salary_min: Optio
     canonical_query = canonicalize_job_query(query)
     key = hashlib.md5(f"{canonical_query}|{top_k}|{profile_salary_min}".encode()).hexdigest()
     if key in _search_cache:
-        return _search_cache[key]
-    result = search_jobs(canonical_query, top_k, profile_salary_min=profile_salary_min)
-    _search_cache[key] = result
-    return result
+        cached = _search_cache[key]
+    else:
+        cached = search_jobs(canonical_query, top_k, profile_salary_min=profile_salary_min)
+        _search_cache[key] = cached
+
+    suppressed = _load_suppressed_job_keys_sync()
+    if not suppressed:
+        return cached
+    return [j for j in cached if _safe_str(j.get("job_key", "")) not in suppressed]
 
 # ─── LLM Prompt & Response ────────────────────────────
 SYSTEM_PROMPT = """You are JobMatch AI, a precise and expert career advisor.
@@ -4196,6 +4201,7 @@ async def admin_block_job(req: AdminBlockJobRequest, token_payload: dict = Depen
         await db.commit()
 
     _invalidate_suppression_cache()
+    _search_cache.clear()
     _browse_cache["fetched_at"] = 0.0
     return {"status": "ok"}
 
@@ -4209,6 +4215,7 @@ async def admin_unblock_job(job_key: str, _: dict = Depends(require_admin)):
         await db.execute("DELETE FROM job_suppressions WHERE job_key = ?", (job_key,))
         await db.commit()
     _invalidate_suppression_cache()
+    _search_cache.clear()
     _browse_cache["fetched_at"] = 0.0
     return {"status": "ok"}
 
@@ -4347,6 +4354,7 @@ async def admin_upload_jobs(
         await db.commit()
 
     _browse_cache["fetched_at"] = 0.0
+    _search_cache.clear()
     return {"status": "ok", "inserted": inserted, "updated": updated, "rows_total": rows_total}
 
 
