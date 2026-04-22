@@ -827,7 +827,7 @@ async function fetchWithRetry(url, options, retries = 2) {
 // ─── SEND TO BACKEND ────────────────────────────────
 async function sendToBackend(profile) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
+  const timeoutId = setTimeout(() => controller.abort(), 130000);
 
   const headers = AUTH.headers();
 
