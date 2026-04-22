@@ -1,0 +1,539 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,top=0.82in,bottom=0.82in,left=0.88in,right=0.88in]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{titlesec}
+\usepackage[protrusion=false,expansion=false]{microtype}
+\usepackage{amsmath}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, shapes.geometric, positioning, calc, backgrounds, fit}
+\usepackage{multirow}
+\usepackage{parskip}
+\usepackage{setspace}
+
+% ── Colours ───────────────────────────────────────────────────────────────────
+\definecolor{rulecol}{RGB}{190,190,190}
+\definecolor{slategray}{RGB}{80,95,115}
+\definecolor{boxbg}{RGB}{246,248,251}
+\definecolor{boxborder}{RGB}{170,185,205}
+\definecolor{redbg}{RGB}{254,242,242}
+\definecolor{redborder}{RGB}{210,90,90}
+\definecolor{orangebg}{RGB}{255,248,235}
+\definecolor{orangeborder}{RGB}{200,135,50}
+\definecolor{bluebg}{RGB}{238,245,255}
+\definecolor{blueborder}{RGB}{110,155,210}
+
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=slategray,citecolor=black}
+
+% ── List formatting ───────────────────────────────────────────────────────────
+\setlist[itemize]{leftmargin=1.5em,topsep=3pt,itemsep=3pt,parsep=0pt}
+\setlist[enumerate]{leftmargin=1.7em,topsep=3pt,itemsep=3pt,parsep=0pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{8pt}
+\linespread{1.08}
+
+% ── Section headings ──────────────────────────────────────────────────────────
+\titleformat{\section}{\large\bfseries}{\thesection}{0.65em}{}%
+  [{\vspace{1pt}\color{rulecol}\titlerule[0.5pt]\vspace{3pt}}]
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titlespacing{\section}{0pt}{14pt}{5pt}
+\titlespacing{\subsection}{0pt}{10pt}{3pt}
+
+\captionsetup{font=small,labelfont=bf,labelsep=period,skip=4pt}
+
+% ── TikZ node styles ──────────────────────────────────────────────────────────
+\tikzset{
+  pipeblock/.style={rectangle,rounded corners=4pt,draw=boxborder,fill=boxbg,
+    text width=2.55cm,align=center,minimum height=1.45cm,font=\small},
+  errblock/.style={rectangle,rounded corners=4pt,draw=redborder,fill=redbg,
+    text width=2.3cm,align=center,minimum height=1.1cm,font=\small},
+  warnblock/.style={rectangle,rounded corners=4pt,draw=orangeborder,fill=orangebg,
+    text width=2.3cm,align=center,minimum height=1.1cm,font=\small},
+  idxblock/.style={rectangle,rounded corners=4pt,draw=blueborder,fill=bluebg,
+    text width=2.3cm,align=center,minimum height=1.1cm,font=\small},
+  swinode/.style={rectangle,rounded corners=3pt,draw=boxborder,fill=boxbg,
+    text width=1.6cm,align=center,font=\footnotesize,minimum height=1.35em,inner sep=3pt},
+  arr/.style={-{Stealth[length=5pt,width=4pt]},thick,color=slategray},
+  redarr/.style={-{Stealth[length=5pt,width=4pt]},thick,color=redborder},
+  orangearr/.style={-{Stealth[length=5pt,width=4pt]},thick,color=orangeborder},
+  bluearr/.style={-{Stealth[length=5pt,width=4pt]},dashed,thick,color=blueborder},
+}
+
+% ── Helpers ───────────────────────────────────────────────────────────────────
+\newcommand{\aifeat}[1]{\textbf{#1}}   % AI feature label
+
+\begin{document}
+\pagenumbering{gobble}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% TITLE PAGE
+%% ─────────────────────────────────────────────────────────────────────────────
+\begin{titlepage}
+  \centering
+  \vspace*{2.2cm}
+  {\Huge\bfseries JobMatch AI\par}
+  \vspace{0.45cm}
+  {\large\color{slategray} A Gemma-Powered RAG System for Personalised Job Matching\par}
+  \vspace{1.8cm}
+  {\color{rulecol}\rule{0.65\linewidth}{0.5pt}\par}
+  \vspace{0.9cm}
+  {\normalsize Applied Generative AI (BUAN361)\par}
+  \vspace{0.5cm}
+  {\normalsize\bfseries Aadit Shah \quad and \quad Ananya Chenny Rahul\par}
+  \vspace{0.5cm}
+  {\normalsize FLAME University \quad|\quad April 2026\par}
+  \vspace{0.9cm}
+  {\color{rulecol}\rule{0.65\linewidth}{0.5pt}\par}
+  \vfill
+\end{titlepage}
+
+\pagenumbering{roman}
+\tableofcontents
+\clearpage
+\pagenumbering{arabic}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% ABSTRACT
+%% ─────────────────────────────────────────────────────────────────────────────
+\section*{Abstract}
+\addcontentsline{toc}{section}{Abstract}
+
+JobMatch AI is a full-stack generative AI application that applies retrieval-augmented generation (RAG) to job search. Given a candidate's resume and preferences, the system retrieves relevant job postings from a Pinecone vector store, reranks them using profile-aware scoring, and passes the top candidates to the Gemma language model, which produces a personalised, grounded recommendation response. Beyond job matching, every downstream action in the workflow is AI-powered: cover letter generation, resume tailoring, keyword-gap analysis, and recruiter email drafting are all handled by Gemma with the relevant job description and resume as context.
+
+The system was evaluated across 19 runs using 10 distinct user profiles. Key results: Precision@5 = 1.0, NDCG@10 = 0.69, Faithfulness = 1.0, and Format Consistency = 0.75. All recommended jobs were grounded in the retrieved candidate set across every run, confirming that the RAG architecture successfully prevents hallucinated postings.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 1. PROBLEM AND OBJECTIVES
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Problem Statement and Objectives}
+
+Job seekers face a two-part problem. First, discovery: public job boards return results by simple keyword matching and provide no explanation of why a role is a good fit. Second, action: once a candidate identifies a role, preparing a tailored cover letter, adjusting their resume, and reaching out to a recruiter each require substantial manual effort. Generative AI is well-suited to both parts, but most course demonstrations address only one narrow slice, typically a single prompt or a chatbot without real data.
+
+This project asks: \textit{Can we build a complete, working GenAI application that reads a resume, retrieves real job postings, explains match quality through a language model, and then supports every downstream application action with AI-generated content?}
+
+The objectives, framed around what the course taught, were:
+
+\begin{itemize}
+  \item Design and implement a full RAG pipeline: corpus ingestion, vector embedding, Pinecone retrieval, candidate reranking, and Gemma-based generation.
+  \item Use Gemma as the engine for five distinct AI tasks within a single application: job match explanation, cover letter writing, resume tailoring, keyword-gap analysis, and recruiter email drafting.
+  \item Build a grounded system where the LLM is always conditioned on retrieved context, never generating jobs or qualifications from parametric memory alone.
+  \item Add evaluation infrastructure to measure retrieval quality, generation faithfulness, output format consistency, diversity, and latency.
+  \item Implement prompt safety: injection detection, resume quality gating, and output faithfulness checking.
+\end{itemize}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 2. SYSTEM OVERVIEW AND TECH STACK
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{System Overview}
+
+JobMatch AI is a browser-based application backed by a Python FastAPI server. The frontend is a static HTML/CSS/JavaScript interface with Google SSO authentication. The backend hosts the RAG pipeline, calls the Gemma API for all generative tasks, reads and writes user state to SQLite, and queries Pinecone for vector retrieval. External job data is ingested from a local Adzuna India dataset (4,000 records) and optionally from live job board APIs.
+
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\linewidth}{p{0.20\linewidth}p{0.18\linewidth}X}
+\toprule
+\textbf{Component} & \textbf{Technology} & \textbf{Role} \\
+\midrule
+LLM               & Gemma-3/4 (Google)   & All generative tasks: matching, cover letters, tailoring, email drafting. \\
+Vector store      & Pinecone Serverless   & Stores job embeddings; serves cosine-similarity retrieval queries. \\
+Embedding         & SHA-256 hash, 768-dim & Deterministic lexical embedding of job text and user profile queries. \\
+Backend           & FastAPI (Python)      & RAG orchestration, safety checks, auth, and API surface. \\
+Persistence       & SQLite / aiosqlite    & User bookmarks, application states, feedback, and resume records. \\
+Resume parsing    & pdfplumber            & Extracts raw text from uploaded PDF resumes. \\
+Email             & Resend                & Delivers AI-generated job results and cover letters by email. \\
+\bottomrule
+\end{tabularx}
+\caption{Technology stack. The AI components (Gemma, Pinecone, embedding) are the core of the system.}
+\end{table}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 3. THE RAG PIPELINE
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{The RAG Pipeline}
+
+\subsection{Overview}
+
+The RAG pipeline is the core of the system. Every job recommendation the user sees is the output of this pipeline, not a response generated purely from the model's parametric knowledge. The pipeline is designed so that Gemma is always conditioned on retrieved, real job postings from the indexed corpus. This prevents hallucination of non-existent roles and grounds the model's explanations in actual job descriptions.
+
+The pipeline runs end-to-end on every recommendation request. Only the Gemma generation step is non-deterministic; all prior stages are deterministic and produce the same output for the same input, making the system debuggable and testable.
+
+\vspace{8pt}
+\begin{center}
+\begin{tikzpicture}[node distance=13pt and 34pt]
+
+  % Main vertical pipeline
+  \node[pipeblock] (pdf)   {Resume PDF\\Input};
+  \node[pipeblock, below=of pdf]   (gate)  {Quality Gate\\and Parse};
+  \node[pipeblock, below=of gate]  (canon) {Query\\Canonicali-\\sation};
+  \node[pipeblock, below=of canon] (pine)  {Pinecone\\Retrieval\\(top-20)};
+  \node[pipeblock, below=of pine]  (rank)  {Keyword\\Reranker\\(top-10)};
+  \node[pipeblock, below=of rank]  (gemma) {Gemma\\Generation};
+  \node[pipeblock, below=of gemma] (out)   {Job Cards\\(Frontend)};
+
+  % Main arrows
+  \draw[arr] (pdf)   -- (gate);
+  \draw[arr] (gate)  -- (canon);
+  \draw[arr] (canon) -- (pine);
+  \draw[arr] (pine)  -- (rank);
+  \draw[arr] (rank)  -- (gemma);
+  \draw[arr] (gemma) -- (out);
+
+  % Rejection branch
+  \node[errblock, right=58pt of gate] (reject)
+    {Reject:\\not a valid\\resume};
+  \draw[redarr] (gate.east) -- (reject.west)
+    node[midway,above,font=\footnotesize,color=redborder]{fail};
+
+  % Fallback branch
+  \node[warnblock, right=58pt of gemma] (fallback)
+    {Fallback:\\deterministic\\response};
+  \draw[orangearr] (gemma.east) -- (fallback.west)
+    node[midway,above,font=\footnotesize,color=orangeborder]{API error};
+
+  % Index node
+  \node[idxblock, right=58pt of pine] (index)
+    {Job Corpus\\(Pinecone\\Index)};
+  \draw[bluearr] (index.west) -- (pine.east)
+    node[midway,above,font=\footnotesize,color=blueborder]{look-up};
+
+\end{tikzpicture}
+\end{center}
+\vspace{2pt}
+\captionof{figure}{The RAG pipeline. The main path (grey arrows) runs top to bottom. Side paths show the Pinecone index feed (blue dashed), quality gate rejection (red), and the Gemma fallback (orange).}
+\vspace{6pt}
+
+\subsection{Step 1: Resume Parsing and Quality Gating}
+
+The pipeline begins when the user uploads a PDF resume. The backend uses \texttt{pdfplumber} to extract raw text, then applies a quality gate before proceeding. The gate checks whether the content resembles a real resume: it rejects documents that consist primarily of repeated instructions, contain no recognisable career content, or appear to be prompt-injection attacks disguised as resumes. PDFs that fail the gate are returned with an error; only valid resumes proceed to the query construction step. This prevents adversarial or malformed documents from influencing the retrieval or generation stages.
+
+\subsection{Step 2: Query Canonicalisation}
+
+The extracted resume text and any user-supplied constraints (desired role, location, salary, work type, skills) are normalised into a canonical query string. Role and skill inputs are lowercased, deduplicated, and joined into a structured format, for example: \texttt{Roles: data analyst | Skills: python, sql | Location: Mumbai}. Prompt-injection patterns are detected and stripped at this stage from all untrusted fields.
+
+Canonicalisation ensures retrieval stability: paraphrased inputs that express the same job need produce the same canonical query and therefore retrieve the same set of candidates. This makes the system's behaviour predictable and testable.
+
+\subsection{Step 3: Pinecone Vector Retrieval}
+
+Each job posting in the corpus is pre-embedded as a 768-dimensional vector using a deterministic SHA-256 hash embedding function. The function maps each token in the job's concatenated text (role, company, location, skills, description) to two fixed positions in the vector via the token's digest bytes. The resulting sparse vector is L2-normalised and stored in Pinecone.
+
+At query time, the canonical query is embedded using the same function and submitted to Pinecone for cosine-similarity search, returning the top-20 candidates. Because the embedding is hash-based rather than neural, it captures lexical overlap rather than semantic similarity: two phrases such as ``ML engineer'' and ``machine learning engineer'' produce zero cosine overlap since they share no token. This explains observed cosine scores in the 0.17--0.45 range, lower than the 0.6--0.9 typical of neural models. The tradeoff is full determinism and zero inference cost at embedding time.
+
+\subsection{Step 4: Keyword Reranking}
+
+The top-20 Pinecone candidates are reranked using a deterministic scoring function that combines six signals: the original Pinecone cosine score, keyword overlap between the profile and the job description, role-title match, resume text alignment, location and work-type compatibility, and salary range fit. The reranker promotes jobs that are more aligned with the full user profile, beyond what raw cosine similarity captures. The top-10 reranked candidates are selected and passed to Gemma.
+
+\subsection{Step 5: Gemma Generation}
+
+The top-10 reranked job postings are assembled into a structured prompt along with the canonical query and relevant resume context. Gemma receives a system prompt that instructs it to act as a precise career advisor and return a structured markdown response listing five recommended jobs, each with:
+
+\begin{itemize}
+  \item A \textbf{Match Score} out of 10, reflecting how well the job fits the candidate's profile.
+  \item A \textbf{Fit Rationale}: a concise explanation of why this role matches the candidate's skills, experience, and preferences.
+  \item An \textbf{Apply Link} drawn directly from the retrieved job record.
+\end{itemize}
+
+Because the candidate list is passed explicitly as context, Gemma cannot recommend a job that was not retrieved. Faithfulness is enforced architecturally, not just by prompting. If the Gemma API call fails or returns a response the frontend cannot parse, the backend returns a deterministic fallback response so the application remains usable.
+
+\subsection{Prompt Design and Safety}
+
+The system prompt is carefully structured to produce consistent, parseable output. It specifies the expected markdown schema, instructs the model not to invent job details beyond what appears in the context, and explicitly disallows any preamble or explanatory text outside the defined format. This prompt engineering is what produces the Format Consistency score of 0.75 observed in evaluation: six of eight format rules pass at 100\%, with the two failures attributable to Gemma occasionally folding the company name and location into the job heading rather than listing them as separate bold fields.
+
+Prompt injection safety is enforced at the canonicalisation stage and again at the generation stage. Patterns such as ``ignore previous instructions'' or ``disregard the above'' are detected and removed from all user-controlled inputs before they reach the prompt.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 4. AI FEATURES
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{AI-Powered Features}
+
+Beyond the core RAG pipeline, JobMatch AI implements four additional Gemma-powered features. Each is designed as a grounded generation task: Gemma always receives the relevant job description and resume as context, ensuring that the output is specific to the candidate and the role rather than generic.
+
+\subsection{Cover Letter Generation}
+
+When a user selects a job from their results or saved applications, they can request a cover letter. The backend constructs a prompt containing the full job description, the user's resume text, and the extracted profile summary. Gemma is instructed to write a professional, concise cover letter that highlights the candidate's most relevant skills and experience in relation to the specific role and company. The output is grounded in the actual job description, so it references the employer's requirements rather than producing a generic template. The generated letter is displayed in a modal and can be emailed directly to the user via the Resend integration.
+
+\subsection{Resume Tailoring and Keyword-Gap Analysis}
+
+Each job posting has a different vocabulary, and applicant tracking systems often filter resumes before a human reads them. The resume tailoring feature addresses this by sending the job description and the candidate's resume to Gemma with a prompt that asks the model to:
+
+\begin{enumerate}
+  \item Identify skills and keywords present in the job description that are missing from the resume.
+  \item Suggest specific rewordings or additions that would improve the resume's alignment with the role.
+  \item Flag experience claims in the resume that could be strengthened given the job's requirements.
+\end{enumerate}
+
+The output is a structured tailoring report displayed in the interface, giving the candidate actionable, role-specific editing guidance. A companion keyword-gap endpoint returns only the present and missing keyword lists, useful for a quick comparison before applying.
+
+\subsection{Recruiter Email Drafting}
+
+Cold outreach to recruiters or hiring managers is often the most effective but most time-consuming part of a job search. The recruiter email feature gives Gemma the job description, the user's resume, and a brief description of the candidate's intent (e.g.\ expressing interest, requesting an informational interview). Gemma drafts a short, professional email that references the specific role and company and highlights the most relevant part of the candidate's background. The draft is returned to the user for review and editing before sending.
+
+\subsection{Job Match Explanation}
+
+The primary RAG response includes a fit rationale for each recommended job. This is not a simple template: Gemma reads the full job description and produces a paragraph explaining \textit{why} this role matches the candidate, citing specific skills, experience, or qualifications from the resume that align with the posting's requirements. Users consistently find this explanation more useful than a numeric score alone, as it identifies which aspects of their background are most relevant and where gaps exist.
+
+\subsection{Workflow and User Journey}
+
+The diagram below shows the full application workflow, including both the core RAG path and the AI-powered downstream actions.
+
+\vspace{8pt}
+\begin{center}
+\begin{tikzpicture}[node distance=0.18cm and 0.18cm]
+
+  % Row 1 (User)
+  \node[swinode] (u1) {Sign In\\(Google)};
+  \node[swinode,right=0.45cm of u1] (u2) {Upload\\Resume};
+  \node[swinode,right=0.45cm of u2] (u3) {Set\\Constraints};
+  \node[swinode,right=0.45cm of u3] (u4) {View AI\\Results};
+  \node[swinode,right=0.45cm of u4] (u5) {Bookmark\\/ Track};
+  \node[swinode,right=0.45cm of u5] (u6) {AI Tools\\/ Email};
+
+  % Row 2 (Frontend)
+  \node[swinode,below=1.05cm of u1] (f1) {Google SSO\\Token};
+  \node[swinode,below=1.05cm of u2] (f2) {PDF Upload\\Panel};
+  \node[swinode,below=1.05cm of u3] (f3) {Constraint\\Inputs};
+  \node[swinode,below=1.05cm of u4] (f4) {Job Cards\\Render};
+  \node[swinode,below=1.05cm of u5] (f5) {Tracker /\\Bookmarks};
+  \node[swinode,below=1.05cm of u6] (f6) {Cover Letter\\Tailoring\\Email Modals};
+
+  % Row 3 (Backend / AI)
+  \node[swinode,below=1.05cm of f1] (b1) {JWT\\Issue};
+  \node[swinode,below=1.05cm of f2] (b2) {Parse and\\Validate};
+  \node[swinode,below=1.05cm of f3] (b3) {RAG\\Pipeline};
+  \node[swinode,below=1.05cm of f4] (b4) {Gemma:\\Match};
+  \node[swinode,below=1.05cm of f5] (b5) {SQLite\\Write};
+  \node[swinode,below=1.05cm of f6] (b6) {Gemma:\\CL / Tailor\\/ Email};
+
+  % Lane backgrounds
+  \begin{scope}[on background layer]
+    \node[draw=boxborder,fill=boxbg,rounded corners=4pt,
+          fit=(u1)(u6),inner sep=7pt,
+          label={[font=\footnotesize\bfseries]left:User}] {};
+    \node[draw=boxborder,fill=white,rounded corners=4pt,
+          fit=(f1)(f6),inner sep=7pt,
+          label={[font=\footnotesize\bfseries]left:Frontend}] {};
+    \node[draw=boxborder,fill=boxbg,rounded corners=4pt,
+          fit=(b1)(b6),inner sep=7pt,
+          label={[font=\footnotesize\bfseries]left:Backend / AI}] {};
+  \end{scope}
+
+  % Horizontal arrows
+  \foreach \s/\t in {u1/u2,u2/u3,u3/u4,u4/u5,u5/u6,
+                     f1/f2,f2/f3,f3/f4,f4/f5,f5/f6,
+                     b1/b2,b2/b3,b3/b4,b4/b5,b5/b6}
+    \draw[arr] (\s.east) -- (\t.west);
+
+  % Vertical arrows
+  \foreach \u/\f in {u1/f1,u2/f2,u3/f3,u4/f4,u5/f5,u6/f6}
+    \draw[arr] (\u.south) -- (\f.north);
+  \foreach \f/\b in {f1/b1,f2/b2,f3/b3,f4/b4,f5/b5,f6/b6}
+    \draw[arr] (\f.south) -- (\b.north);
+
+\end{tikzpicture}
+\end{center}
+\vspace{2pt}
+\captionof{figure}{Full application workflow. The bottom lane is relabelled ``Backend / AI'' to reflect that Gemma is involved at both the matching step (column 4) and all downstream AI tools (column 6).}
+\vspace{6pt}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 5. DATA AND INGESTION
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Data and Ingestion Pipeline}
+
+The quality of RAG output depends directly on the quality of the indexed corpus. JobMatch AI ships with a local Adzuna India dataset of 4,000 JSONL records and supports optional live ingestion from seven external job board APIs (Adzuna, Jooble, Greenhouse, Lever, Remotive, Arbeitnow, USAJobs). Each posting is normalised into a common schema covering title, role category, company, location, salary range, skill tags, description, and source URL before embedding and indexing.
+
+Three indexing modes are supported:
+
+\begin{itemize}
+  \item \texttt{csv\_only}: local dataset only; suitable for offline development.
+  \item \texttt{live\_only}: live external APIs only; requires valid credentials.
+  \item \texttt{hybrid}: combines both and deduplicates by job ID before indexing.
+\end{itemize}
+
+New jobs added through the admin panel are embedded and indexed immediately without a full rebuild. The force-reindex flag clears and rebuilds the Pinecone index from scratch when needed.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 6. EVALUATION
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Evaluation}
+
+\subsection{Setup and Methodology}
+
+19 evaluation records were collected from 10 distinct user profiles run through the live pipeline. Each record logs the canonical query, the pre- and post-rerank candidate lists (20 each), the complete Gemma output, retrieval latency, and generation latency, all stored in \texttt{eval\_log.jsonl}.
+
+Standard frameworks (RAGAS, DeepEval) were not used because they require annotated QA pairs and semantic embedding similarity, neither of which applies to this system's hash-based retrieval. Instead, three relevance proxies are used: (1) Gemma match scores as graded relevance for NDCG; (2) Pinecone cosine scores with a relative median threshold for Precision@K; and (3) user feedback ratings (none collected in this run, so feedback-based metrics are omitted).\footnote{Recall@K, Hit@K, MRR, and MAP@K all require user ratings. Even 20 to 30 rated sessions would enable these metrics.}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lc}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Evaluation records            & 19 \\
+Distinct user profiles        & 10 \\
+Candidates retrieved per run  & 20 \\
+Jobs scored by Gemma per run  & 5 \\
+Total Gemma match scores      & 95 \\
+LLM                           & Gemma-3/4 (Google Generative AI API) \\
+Vector store                  & Pinecone Serverless \\
+\bottomrule
+\end{tabular}
+\caption{Evaluation setup.}
+\end{table}
+
+\subsection{Retrieval Metrics}
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Metric} & \textbf{K=3} & \textbf{K=5} & \textbf{K=10} & \textbf{K=20} \\
+\midrule
+Precision@K (relative threshold) & 1.0000 & 1.0000 & 0.9263 & 0.5000 \\
+NDCG@K with reranking            & 0.6655 & 0.6909 & 0.6898 & 0.6898 \\
+NDCG@K without reranking         & 0.6960 & 0.7075 & 0.6900 & 0.6887 \\
+\bottomrule
+\end{tabular}
+\caption{Retrieval metrics across K values.}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.48\linewidth]{eval_plots/plot1_pinecone_scores.png}
+  \hfill
+  \includegraphics[width=0.48\linewidth]{eval_plots/plot2_ndcg_curve.png}
+  \caption{Left: Pinecone cosine score distribution (dashed = median threshold). Right: NDCG@K with and without reranking.}
+\end{figure}
+
+\subsection{Reranking Ablation}
+
+The keyword reranker decreases NDCG slightly at small K (--0.03 at K=3) but converges at K=10 and marginally outperforms the baseline at K=20. The reranker is designed to promote profile-aligned candidates that Pinecone scored lower due to vocabulary mismatch; the cost is occasionally displacing a Gemma-preferred job from positions 1--3.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lccr}
+\toprule
+\textbf{K} & \textbf{With reranking} & \textbf{Without reranking} & \textbf{Delta} \\
+\midrule
+3  & 0.6655 & 0.6960 & --0.0305 \\
+5  & 0.6909 & 0.7075 & --0.0166 \\
+10 & 0.6898 & 0.6900 & --0.0002 \\
+20 & 0.6898 & 0.6887 & +0.0011  \\
+\bottomrule
+\end{tabular}
+\caption{NDCG@K reranking ablation.}
+\end{table}
+
+\subsection{Generation Quality}
+
+\begin{table}[H]
+\centering\small
+\begin{tabularx}{\linewidth}{p{0.28\linewidth}p{0.15\linewidth}X}
+\toprule
+\textbf{Metric} & \textbf{Value} & \textbf{Notes} \\
+\midrule
+Format Consistency  & 0.75 / 1.0  & 6 of 8 format rules pass at 100\%; 2 fail because Gemma folds company/location into the job heading. \\
+Faithfulness        & 1.00 / 1.0  & Every recommended job was present in the retrieved candidate set across all 19 runs. \\
+LLM Match Score     & 4.74 / 10   & std = 0.99; scores concentrate in the 3--6 range, reflecting lexical retrieval limitations. \\
+\midrule
+Retrieval latency   & 2,140 ms    & std = 2,083 ms; high variance from Pinecone cold-start on first query per session. \\
+Generation latency  & 30,153 ms   & std = 966 ms; Gemma API call dominates end-to-end time. \\
+Company diversity   & 0.6947      & Most result sets contain 6--7 distinct companies. \\
+Location diversity  & 0.4000      & Moderate; results cluster around a small number of cities. \\
+\bottomrule
+\end{tabularx}
+\caption{Generation quality and system-level metrics.}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.48\linewidth]{eval_plots/plot3_match_scores.png}
+  \hfill
+  \includegraphics[width=0.48\linewidth]{eval_plots/plot4_latency.png}
+  \caption{Left: Gemma match score distribution (n=95). Right: retrieval vs.\ generation latency per request.}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.58\linewidth]{eval_plots/plot5_rerank_ablation.png}
+  \caption{NDCG@K before and after reranking.}
+\end{figure}
+
+\subsection{Discussion}
+
+\textbf{Faithfulness is the most important result.} A score of 1.0 across all 19 runs confirms that the RAG architecture works as intended: Gemma never recommended a job outside the retrieved set. In a job-recommendation context this is critical, since a hallucinated posting would send a candidate to a non-existent application link.
+
+\textbf{Retrieval quality is bounded by hash embeddings.} Precision@5 = 1.0 shows that the top-5 retrieved candidates are consistently above median relevance. NDCG@10 = 0.69 reflects a good but not optimal ranking. The mean Gemma match score of 4.74/10 reveals the underlying limitation: hash embeddings cannot bridge vocabulary gaps between the query and the job description, so retrieved jobs are lexically similar but not always semantically optimal. Replacing hash embeddings with a neural model would directly raise both NDCG and match scores.
+
+\textbf{Reranker adds diversity, not ranking quality.} The ablation shows the reranker has near-zero impact on NDCG at K=10, confirming that its value lies in surface-level profile alignment and result diversity rather than raw ranking quality.
+
+\textbf{Latency.} Generation (~30 s) dominates retrieval (~2 s). The high retrieval standard deviation is driven by Pinecone cold-start on the first query of a session.
+
+\begin{table}[H]
+\centering\small
+\begin{tabular}{lc}
+\toprule
+\textbf{Format Rule} & \textbf{Pass Rate} \\
+\midrule
+\texttt{has\_main\_heading}            & 1.00 \\
+\texttt{has\_subheading}               & 1.00 \\
+\texttt{has\_job\_blocks}              & 1.00 \\
+\texttt{has\_match\_score}             & 1.00 \\
+\texttt{has\_why\_section}             & 1.00 \\
+\texttt{has\_apply\_link}              & 1.00 \\
+\texttt{has\_company\_or\_role\_field} & 0.00 \\
+\texttt{has\_location\_field}          & 0.00 \\
+\bottomrule
+\end{tabular}
+\caption{Per-rule format pass rates. The two failing rules reflect a Gemma style choice, not a structural failure.}
+\end{table}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 7. LIMITATIONS
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Limitations}
+
+\textbf{Hash embedding quality.} The SHA-256 embedding cannot bridge vocabulary gaps. A query mentioning ``ML'' will not retrieve a posting that only uses ``machine learning'', even though they refer to the same skill. This is the single largest ceiling on retrieval quality and Gemma match scores.
+
+\textbf{No user feedback data.} Feedback-based metrics (Recall@K, MRR, MAP@K) require user ratings, which were not collected during this evaluation run. The system has a feedback endpoint; populating it with even 20--30 rated sessions would unlock a meaningful additional evaluation dimension.
+
+\textbf{Self-evaluation bias in match scores.} Gemma assigns match scores to its own recommendations. A model may score its own output more favourably than an independent judge would. The LLM-as-judge metric (a separate judge prompt) would partially address this but was not run due to API cost.
+
+\textbf{LLM document quality.} Cover letters, tailored resumes, and recruiter emails require user review before use. Gemma may produce plausible but imprecise claims if the resume context is sparse or ambiguous.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 8. FUTURE SCOPE
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Future Scope}
+
+The highest-impact improvement is replacing SHA-256 hash embeddings with a pre-trained neural model such as \texttt{text-embedding-3-small} or \texttt{all-MiniLM-L6-v2}. This single change would improve semantic retrieval, raise NDCG and Gemma match scores, and benefit every downstream AI feature, since all of them depend on the quality of the retrieved context.
+
+Additional improvements worth pursuing:
+
+\begin{itemize}
+  \item \textbf{Hybrid retrieval:} combine Pinecone vector search with BM25 keyword ranking for complementary coverage.
+  \item \textbf{Feedback loop:} collect user ratings and use them for personalised reranking and ongoing evaluation.
+  \item \textbf{Agentic resume editing:} allow Gemma to iteratively refine the resume against a job description over multiple turns rather than producing a one-shot tailoring report.
+  \item \textbf{Interview preparation:} generate likely interview questions based on the job description and the candidate's resume gaps.
+  \item \textbf{ATS formatting:} produce downloadable, ATS-compatible resume exports alongside the tailoring analysis.
+\end{itemize}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+%% 9. CONCLUSION
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+
+JobMatch AI is a grounded, full-stack generative AI application built around a RAG pipeline. The system uses Gemma for five distinct AI tasks, all conditioned on retrieved job data or the candidate's resume: job match explanation, cover letter generation, resume tailoring, keyword-gap analysis, and recruiter email drafting. The RAG architecture ensures that every recommended job exists in the indexed corpus, confirmed by a Faithfulness score of 1.0 across all 19 evaluation runs.
+
+Retrieval quality is currently bounded by the hash-based embedding strategy. Precision@5 = 1.0 shows that the top candidates are consistently above-median relevance, and NDCG@10 = 0.69 reflects reasonable ranking quality given the lexical retrieval constraint. Replacing hash embeddings with a neural model is the clearest path to meaningfully better retrieval and higher Gemma match scores.
+
+The project demonstrates that RAG is not just a retrieval trick: when combined with a capable language model and thoughtful prompt design, it enables a family of grounded generative features that would be impossible, or unsafe, without the retrieved context.
+
+\end{document}
