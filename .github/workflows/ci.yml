@@ -32,6 +32,14 @@ jobs:
           JOBMATCH_API_KEY: stub
         run: python -c "import backend; print('imports OK')"
 
+      - name: Run tests
+        env:
+          OPENAI_API_KEY: ""
+          GOOGLE_API_KEY: ""
+          PINECONE_API_KEY: ""
+          JOBMATCH_API_KEY: ""
+        run: pytest -q
+
   frontend:
     name: Frontend — static file check
     runs-on: ubuntu-latest

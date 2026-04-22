@@ -977,6 +977,7 @@ async function createBookmarkRecord(jobTitle, company, location, salary, matchSc
     const d = await res.json().catch(() => ({}));
     throw new Error(d.detail || `Bookmark save failed (${res.status})`);
   }
+  return await res.json().catch(() => ({}));
 }
 
 async function checkApplication(jobTitle, company) {
@@ -2732,6 +2733,9 @@ function renderBrowseJobCard(job, idx) {
       data-location="${esc(locationDisplay)}"
       data-salary="${esc(job.salary || '')}"
       data-description="${esc((job.description || '').slice(0, 300))}"
+      data-job-uid="${esc(job.job_uid || '')}"
+      data-source="${esc(job.source || '')}"
+      data-external-url="${esc(job.external_url || '')}"
       title="${isBookmarked ? 'Remove bookmark' : 'Bookmark this job'}">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="${isBookmarked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z"/></svg>
     </button>
@@ -2741,7 +2745,8 @@ function renderBrowseJobCard(job, idx) {
   html += `<div class="bjc-meta">`;
   if (locationDisplay) html += `<span class="bjc-chip bjc-chip-location"><svg width="11" height="11" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.05 4.05a7 7 0 119.9 9.9L10 18.9l-4.95-4.95a7 7 0 010-9.9zM10 11a2 2 0 100-4 2 2 0 000 4z" clip-rule="evenodd"/></svg>${esc(locationDisplay)}</span>`;
   if (job.work_type) html += `<span class="${workTypeChipClass(job.work_type)}">${esc(job.work_type)}</span>`;
-  if (job.salary) html += `<span class="bjc-chip bjc-chip-salary">💰 ${esc(job.salary)}</span>`;
+  if (job.salary) html += `<span class="bjc-chip bjc-chip-salary">Salary: ${esc(job.salary)}</span>`;
+  if (job.posting_date) html += `<span class="bjc-chip">${esc(String(job.posting_date).slice(0, 10))}</span>`;
   html += `</div>`;
 
   // Description snippet
@@ -2770,6 +2775,85 @@ function renderBrowseJobCard(job, idx) {
   html += `</article>`;
   return html;
 }
+
+function setAdminDataStatus(payload, isError = false) {
+  const el = document.getElementById('adminDataStatus');
+  if (!el) return;
+  el.classList.remove('hidden');
+  el.textContent = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+  el.style.background = isError ? '#7f1d1d' : '#0f172a';
+}
+
+async function fetchJsonAdmin(path, options = {}) {
+  const res = await fetch(`${CONFIG.API_BASE_URL}${path}`, {
+    ...options,
+    headers: authHeaders(options.headers || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+
+document.getElementById('adminStatsBtn')?.addEventListener('click', async () => {
+  setAdminDataStatus('Loading stats...');
+  try {
+    const data = await fetchJsonAdmin('/jobs/stats');
+    setAdminDataStatus(data);
+  } catch (err) {
+    setAdminDataStatus(err.message || 'Stats failed', true);
+  }
+});
+
+document.getElementById('adminRefreshJobsBtn')?.addEventListener('click', async () => {
+  setAdminDataStatus('Fetching configured sources and indexing new jobs...');
+  try {
+    const data = await fetchJsonAdmin('/jobs/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ force_reindex: false }),
+    });
+    setAdminDataStatus(data);
+    browseState.page = 0;
+    await fetchAndRenderBrowseJobs();
+  } catch (err) {
+    setAdminDataStatus(err.message || 'Refresh failed', true);
+  }
+});
+
+document.getElementById('adminAddJobForm')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const title = document.getElementById('adminJobTitle')?.value.trim() || '';
+  const company = document.getElementById('adminJobCompany')?.value.trim() || '';
+  const location = document.getElementById('adminJobLocation')?.value.trim() || '';
+  const skillsRaw = document.getElementById('adminJobSkills')?.value.trim() || '';
+  const externalUrl = document.getElementById('adminJobUrl')?.value.trim() || '';
+  if (!title) return;
+
+  setAdminDataStatus('Adding job and indexing it...');
+  try {
+    const data = await fetchJsonAdmin('/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        title,
+        role: title,
+        company,
+        location,
+        skills: skillsRaw.split(',').map(s => s.trim()).filter(Boolean),
+        source: 'manual',
+        external_url: externalUrl,
+        description: `Manual demo job added from the dashboard for ${title}${company ? ` at ${company}` : ''}.`,
+      }),
+    });
+    e.target.reset();
+    setAdminDataStatus(data);
+    browseState.page = 0;
+    browseState.q = title;
+    const searchInput = document.getElementById('browseSearchInput');
+    if (searchInput) searchInput.value = title;
+    await fetchAndRenderBrowseJobs();
+  } catch (err) {
+    setAdminDataStatus(err.message || 'Add job failed', true);
+  }
+});
 
 async function fetchAndRenderBrowseJobs() {
   if (browseState.loading) return;
@@ -2906,44 +2990,47 @@ document.getElementById('browseJobsGrid')?.addEventListener('click', async (e) =
   const location    = btn.dataset.location || '';
   const salary      = btn.dataset.salary || '';
   const description = btn.dataset.description || '';
+  const jobUid      = btn.dataset.jobUid || '';
+  const source      = btn.dataset.source || '';
+  const externalUrl = btn.dataset.externalUrl || '';
 
   const isBookmarked = AppState.isBookmarked(title, company);
 
   if (isBookmarked) {
     const existing = AppState.bookmarks.find(b => sameJob(b.job_title, b.company, title, company));
-    if (existing?.bookmark_id) {
+    const existingId = existing?.id || existing?.bookmark_id;
+    if (existingId) {
       try {
-        await fetch(`${CONFIG.API_BASE_URL}/bookmarks/${existing.bookmark_id}`, {
+        await fetch(`${CONFIG.API_BASE_URL}/bookmarks/${existingId}`, {
           method: 'DELETE',
           headers: authHeaders(),
         });
-        AppState.bookmarks = AppState.bookmarks.filter(b => b.bookmark_id !== existing.bookmark_id);
+        AppState.bookmarks = AppState.bookmarks.filter(b => (b.id || b.bookmark_id) !== existingId);
         showToast('Bookmark removed');
       } catch { showToast('Failed to remove bookmark'); }
     }
   } else {
     try {
-      const res = await fetch(`${CONFIG.API_BASE_URL}/bookmark`, {
-        method: 'POST',
-        headers: authHeaders(),
-        body: JSON.stringify({
-          session_id: currentSessionId,
-          job_title: title,
-          company,
-          location,
-          salary,
-          score: 0,
-          description,
-        }),
+      const data = await createBookmarkRecord(title, company, location, salary, 0, {
+        title,
+        company,
+        location,
+        salary,
+        description,
+        job_uid: jobUid,
+        source,
+        external_url: externalUrl,
       });
-      const data = await res.json();
+      await saveApplicationStatus(title, company, 'saved', '');
       AppState.bookmarks.push({
+        id: data.id || data.bookmark_id,
         bookmark_id: data.bookmark_id,
         job_title: title,
         company,
         location,
         salary,
-        score: 0,
+        match_score: 0,
+        job_data: { description, job_uid: jobUid, source, external_url: externalUrl },
       });
       showToast('Job bookmarked!');
     } catch { showToast('Failed to bookmark job'); }

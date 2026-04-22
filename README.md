@@ -55,10 +55,17 @@ curl -X POST "http://localhost:8000/index?force=true" -H "X-Api-Key: <JOBMATCH_A
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Health check |
+| `GET` | `/readiness` | Checks credentials, DB, CSV, and vector index readiness |
 | `POST` | `/webhook` | Main job-match endpoint |
 | `POST` | `/debug/retrieval` | Returns compact retrieval candidates |
+| `POST` | `/debug/rag-trace` | Returns query, candidates, lexical overlap, model info, and prompt preview |
 | `POST` | `/index` | (Re)index dataset (`force=true` optional) |
 | `GET` | `/sources/status` | Configured sources + per-source counts from latest index run |
+| `GET` | `/jobs/stats` | Canonical job DB count, active count, source counts, and vector count |
+| `GET` | `/jobs/browse` | Paginated browse/search over canonical jobs |
+| `POST` | `/jobs` | Add one job and index it when credentials are configured |
+| `POST` | `/jobs/import-csv` | Upload a CSV and import/index jobs |
+| `POST` | `/jobs/refresh` | Fetch configured external sources and index new jobs |
 | `POST` | `/parse-resume` | Parse PDF resume to structured profile |
 | `POST` | `/cover-letter` | Generate tailored cover letter |
 | `POST` | `/compose-recruiter-email` | Generate Gmail-ready recruiter email + tailored resume text |

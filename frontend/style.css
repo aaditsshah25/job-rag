@@ -4486,6 +4486,66 @@ body::after {
   transform: translateY(0);
 }
 
+.admin-data-panel {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-data-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.admin-data-header h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.admin-data-header p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.admin-data-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.admin-add-job-form {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr)) auto;
+  gap: 8px;
+}
+
+.admin-add-job-form input {
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 10px;
+  padding: 10px 11px;
+  font: inherit;
+}
+
+.admin-data-status {
+  margin: 12px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 12px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.78rem;
+  white-space: pre-wrap;
+}
+
 @media (min-width: 768px) {
   .myapps-list {
     grid-template-columns: 1fr 1fr;
@@ -4500,5 +4560,13 @@ body::after {
   .myapps-footer {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .admin-data-header {
+    flex-direction: column;
+  }
+
+  .admin-add-job-form {
+    grid-template-columns: 1fr;
   }
 }

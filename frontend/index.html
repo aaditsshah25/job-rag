@@ -365,6 +365,28 @@
           </div>
         </div>
 
+        <div class="admin-data-panel">
+          <div class="admin-data-header">
+            <div>
+              <h3>Data Controls</h3>
+              <p>Add one job, fetch configured live jobs, or check index health for demo questions.</p>
+            </div>
+            <div class="admin-data-actions">
+              <button id="adminStatsBtn" class="btn-secondary" type="button">Check Stats</button>
+              <button id="adminRefreshJobsBtn" class="btn-secondary" type="button">Fetch More Jobs</button>
+            </div>
+          </div>
+          <form id="adminAddJobForm" class="admin-add-job-form">
+            <input id="adminJobTitle" type="text" placeholder="Job title" required />
+            <input id="adminJobCompany" type="text" placeholder="Company" />
+            <input id="adminJobLocation" type="text" placeholder="Location" />
+            <input id="adminJobSkills" type="text" placeholder="Skills, comma separated" />
+            <input id="adminJobUrl" type="url" placeholder="Apply URL" />
+            <button class="btn-primary" type="submit">Add Job</button>
+          </form>
+          <pre id="adminDataStatus" class="admin-data-status hidden"></pre>
+        </div>
+
         <!-- Job Grid -->
         <div id="browseJobsState" class="state-card">
           <div class="state-icon">
