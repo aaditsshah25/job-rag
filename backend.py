@@ -516,10 +516,42 @@ async def _ensure_table_columns():
                 rows = await cursor.fetchall()
             return any(row[1] == column for row in rows)
 
+        async def has_table(table: str) -> bool:
+            async with db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,)
+            ) as cursor:
+                return await cursor.fetchone() is not None
+
         if not await has_column("bookmarks", "user_email"):
             await db.execute("ALTER TABLE bookmarks ADD COLUMN user_email TEXT")
         if not await has_column("applications", "user_email"):
             await db.execute("ALTER TABLE applications ADD COLUMN user_email TEXT")
+
+        # Backfill users table from existing bookmarks/applications if table was just created empty
+        if await has_table("users"):
+            async with db.execute("SELECT COUNT(*) FROM users") as cur:
+                user_count = (await cur.fetchone())[0]
+            if user_count == 0:
+                # Pull distinct emails from bookmarks
+                async with db.execute(
+                    "SELECT DISTINCT user_email FROM bookmarks WHERE user_email IS NOT NULL AND user_email != ''"
+                ) as cur:
+                    bk_emails = [r[0] for r in await cur.fetchall()]
+                # Pull distinct emails from applications
+                async with db.execute(
+                    "SELECT DISTINCT user_email FROM applications WHERE user_email IS NOT NULL AND user_email != ''"
+                ) as cur:
+                    app_emails = [r[0] for r in await cur.fetchall()]
+                all_emails = list(set(bk_emails + app_emails))
+                now = datetime.utcnow().isoformat() + "Z"
+                for email in all_emails:
+                    await db.execute(
+                        "INSERT OR IGNORE INTO users (email, name, picture, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?)",
+                        (email.lower().strip(), email.split("@")[0], "", now, now),
+                    )
+                if all_emails:
+                    log.info("Backfilled %d users from bookmarks/applications.", len(all_emails))
+
         await db.commit()
 
 # ─── Database init ────────────────────────────────────
@@ -1731,6 +1763,96 @@ def job_to_text(job: dict) -> str:
     return "\n".join(p for p in parts if not p.endswith(": "))
 
 
+def _chunk_job_text(job: dict, chunk_size: int = 400, overlap: int = 80) -> list[str]:
+    """
+    Split a job into overlapping text chunks for finer-grained Pinecone vectors.
+    The header (title/skills/location) is prepended to every chunk so each vector
+    is self-contained for retrieval.
+    """
+    title = job.get('title', '')
+    role = job.get('role', title)
+    skills = job.get('skills', [])
+    skills_str = ', '.join(skills[:20])
+    header = (
+        f"Job Title: {title}\nRole: {role}\n"
+        f"Company: {job.get('company','')}\n"
+        f"Location: {job.get('location','')}, {job.get('country','')}\n"
+        f"Experience: {job.get('experience','')}\n"
+        f"Industry: {job.get('industry','')}\n"
+        f"Skills: {skills_str}\n"
+    )
+    description = (job.get('description') or '').strip()
+    responsibilities = (job.get('responsibilities') or '').strip()
+    body = '\n'.join(filter(None, [description, responsibilities]))
+
+    if not body:
+        return [header]
+
+    # Split body into word-level chunks with overlap
+    words = body.split()
+    chunks = []
+    i = 0
+    while i < len(words):
+        chunk_words = words[i: i + chunk_size]
+        chunks.append(header + ' '.join(chunk_words))
+        if i + chunk_size >= len(words):
+            break
+        i += chunk_size - overlap
+
+    return chunks if chunks else [header]
+
+
+def _index_admin_jobs_incremental(jobs: list[dict]) -> int:
+    """
+    Upsert only the given admin jobs into Pinecone WITHOUT wiping the existing index.
+    Each job is split into text chunks; each chunk becomes a separate vector.
+    """
+    if not jobs or not PINECONE_API_KEY:
+        return 0
+    index = get_or_create_index()
+
+    vectors: list[dict] = []
+    for job in jobs:
+        chunks = _chunk_job_text(job)
+        base_meta = {
+            "title": job.get("title", ""),
+            "role": job.get("role", job.get("title", "")),
+            "company": job.get("company", ""),
+            "location": job.get("location", ""),
+            "country": job.get("country", ""),
+            "work_type": job.get("work_type", ""),
+            "salary": job.get("salary", ""),
+            "salary_min": _extract_salary_min(job.get("salary", "")),
+            "experience": job.get("experience", ""),
+            "qualifications": job.get("qualifications", ""),
+            "skills": (job.get("skills") or [])[:20],
+            "benefits": (job.get("benefits") or [])[:10],
+            "description": (job.get("description") or "")[:500],
+            "responsibilities": (job.get("responsibilities") or "")[:300],
+            "sector": job.get("sector", ""),
+            "industry": job.get("industry", ""),
+            "company_size": job.get("company_size", ""),
+            "embedding_provider": EMBEDDING_PROVIDER,
+            "source": job.get("source", "admin_upload"),
+            "external_url": job.get("external_url", ""),
+        }
+        for c_idx, chunk_text in enumerate(chunks):
+            emb = _hash_embed_text(chunk_text)
+            base_id = _safe_str(job.get("job_id") or job.get("job_key", ""))
+            vid = f"admin_{hashlib.md5(base_id.encode()).hexdigest()[:16]}_c{c_idx}"
+            meta = {**base_meta, "chunk_index": c_idx, "total_chunks": len(chunks)}
+            vectors.append({"id": vid, "values": emb, "metadata": meta})
+
+    UPSERT_BATCH = 100
+    total = 0
+    for i in range(0, len(vectors), UPSERT_BATCH):
+        batch = vectors[i: i + UPSERT_BATCH]
+        index.upsert(vectors=batch)
+        total += len(batch)
+    log.info("Incremental admin upsert: %d chunks from %d jobs", total, len(jobs))
+    return total
+
+
 def _stable_job_vector_id(job: dict, fallback_idx: int) -> str:
     base_id = _safe_str(job.get("job_id"))
     if base_id:
@@ -1851,10 +1973,14 @@ def index_dataset(force: bool = False) -> int:
                 "Set ENABLE_EXTERNAL_SOURCES=true and configure at least one source."
             )
 
-    # Admin-uploaded jobs (stored in SQLite)
+    # Admin-uploaded jobs (stored in SQLite) — expand into chunks
     admin_jobs = _load_admin_jobs_sync(active_only=True)
     if admin_jobs:
-        jobs.extend(admin_jobs)
+        for aj in admin_jobs:
+            chunks = _chunk_job_text(aj)
+            for c_idx, chunk_text in enumerate(chunks):
+                chunk_job = {**aj, "_chunk_text": chunk_text, "_chunk_index": c_idx, "_total_chunks": len(chunks)}
+                jobs.append(chunk_job)
 
     if not jobs:
         raise RuntimeError(
@@ -1880,11 +2006,14 @@ def index_dataset(force: bool = False) -> int:
 
     def embed_batch(batch_and_offset):
         batch, offset = batch_and_offset
-        texts = [job_to_text(j) for j in batch]
+        # Use pre-computed chunk text if available (admin jobs), else build via job_to_text
+        texts = [j.get("_chunk_text") or job_to_text(j) for j in batch]
         embeddings = embed_texts(texts)
         vectors = []
         for idx2, (job, emb) in enumerate(zip(batch, embeddings)):
-            vid = _stable_job_vector_id(job, offset + idx2)
+            c_idx = job.get("_chunk_index", 0)
+            base_vid = _stable_job_vector_id(job, offset + idx2)
+            vid = f"{base_vid}_c{c_idx}" if job.get("_chunk_index") is not None else base_vid
             meta = {
                 "title": job["title"], "role": job["role"], "company": job["company"],
                 "location": job["location"], "country": job["country"], "work_type": job["work_type"],
@@ -1895,6 +2024,7 @@ def index_dataset(force: bool = False) -> int:
                 "sector": job["sector"], "industry": job["industry"], "company_size": job["company_size"],
                 "embedding_provider": EMBEDDING_PROVIDER,
                 "source": job.get("source", "local_csv"), "external_url": job.get("external_url", ""),
+                "chunk_index": c_idx, "total_chunks": job.get("_total_chunks", 1),
             }
             vectors.append({"id": vid, "values": emb, "metadata": meta})
         return vectors
@@ -4375,15 +4505,42 @@ async def admin_upload_jobs(
     _browse_cache["fetched_at"] = 0.0
     _search_cache.clear()
 
-    # Auto-reindex into Pinecone after successful import
+    # Incrementally upsert the new/updated jobs into Pinecone (chunked, no full wipe)
     indexed_vectors = 0
     index_error = None
-    if PINECONE_API_KEY:
+    if PINECONE_API_KEY and valid_jobs:
         try:
-            indexed_vectors = await asyncio.to_thread(index_dataset, True)
+            # Build job dicts in the same shape _load_admin_jobs_sync returns
+            jobs_for_index = [
+                {
+                    "job_key": j["job_key"],
+                    "job_id": j["job_id"],
+                    "title": j["title"],
+                    "role": j["title"],
+                    "company": j["company"],
+                    "location": j["location"],
+                    "country": j["country"],
+                    "work_type": j["work_type"],
+                    "salary": j["salary"],
+                    "experience": j["experience"],
+                    "industry": j["industry"],
+                    "description": j["description"],
+                    "responsibilities": "",
+                    "qualifications": "",
+                    "skills": j["skills"],
+                    "benefits": j["benefits"],
+                    "sector": "",
+                    "company_size": "",
+                    "posting_date": j["posting_date"],
+                    "source": "admin_upload",
+                    "external_url": j["external_url"],
+                }
+                for j in valid_jobs
+            ]
+            indexed_vectors = await asyncio.to_thread(_index_admin_jobs_incremental, jobs_for_index)
         except Exception as exc:
             index_error = str(exc)
-            log.warning("Post-upload reindex failed: %s", exc)
+            log.warning("Post-upload incremental index failed: %s", exc)
 
     return {
         "status": "ok",
