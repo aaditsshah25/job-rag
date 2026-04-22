@@ -24,12 +24,14 @@ GitHub (aaditsshah25/job-rag)
 | Variable | Description | Example |
 |---|---|---|
 | `GOOGLE_API_KEY` | Google API key for Gemma calls | `AIza...` |
+| `OPENAI_API_KEY` | OpenAI API key for embeddings | `sk-...` |
 | `GEMMA_CHAT_MODEL` | Gemma model name (Gemma-only) | `gemma-3-27b-it` |
+| `ENABLE_LLM_JOB_RANKING` | Enable Gemma ranking/formatting | `true` |
 | `PINECONE_API_KEY` | Pinecone API key | `...` |
 | `PINECONE_INDEX` | Pinecone index name | `job-listings1` |
 | `PINECONE_CLOUD` | Pinecone cloud | `aws` |
 | `PINECONE_REGION` | Pinecone region | `us-east-1` |
-| `VECTOR_DIM` | Local hash vector dimension | `1536` |
+| `VECTOR_DIM` | Embedding vector dimension | `1536` |
 | `JOBMATCH_API_KEY` | Shared secret for frontend→backend auth | any random string |
 | `JWT_SECRET` | JWT signing secret | any random string |
 | `ALLOWED_ORIGINS` | CORS allowed origins (comma-separated) | see below |

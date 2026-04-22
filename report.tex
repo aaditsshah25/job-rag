@@ -108,7 +108,7 @@
 
 JobMatch AI is a full-stack generative AI application that applies retrieval-augmented generation (RAG) to job search. Given a candidate's resume and preferences, the system retrieves relevant job postings from a Pinecone vector store, reranks them using profile-aware scoring, and passes the top candidates to the Gemma language model, which produces a personalised, grounded recommendation response. Beyond job matching, every downstream action in the workflow is AI-powered: cover letter generation, resume tailoring, keyword-gap analysis, and recruiter email drafting are all handled by Gemma with the relevant job description and resume as context.
 
-The system was evaluated across 19 runs using 10 distinct user profiles. Key results: Precision@5 = 1.0, NDCG@10 = 0.69, Faithfulness = 1.0, and Format Consistency = 0.75. All recommended jobs were grounded in the retrieved candidate set across every run, confirming that the RAG architecture successfully prevents hallucinated postings.
+The system was evaluated across 19 runs using 10 distinct user profiles. Key observed results include Precision@5 = 1.0, NDCG@10 = 0.69, Faithfulness = 1.0, and Format Consistency = 0.75. Faithfulness = 1.0 indicates that, in this evaluation, every recommended job was drawn from the retrieved candidate set, providing strong evidence that the pipeline avoids hallucinated postings. These results are preliminary due to the small sample size, and several metrics rely on proxy relevance signals (e.g., Gemma-generated match scores), which are not independent ground truth.
 
 %% ─────────────────────────────────────────────────────────────────────────────
 %% 1. PROBLEM AND OBJECTIVES
@@ -136,6 +136,13 @@ The objectives, framed around what the course taught, were:
 
 JobMatch AI is a browser-based application backed by a Python FastAPI server. The frontend is a static HTML/CSS/JavaScript interface with Google SSO authentication. The backend hosts the RAG pipeline, calls the Gemma API for all generative tasks, reads and writes user state to SQLite, and queries Pinecone for vector retrieval. External job data is ingested from a local Adzuna India dataset (4,000 records) and optionally from live job board APIs.
 
+\subsection{Project Access}
+
+\begin{itemize}
+  \item Deployed Application: \url{https://jobmatch-ai-app.vercel.app/}
+  \item GitHub Repository: \url{https://github.com/aaditsshah25/job-rag}
+\end{itemize}
+
 \begin{table}[H]
 \centering\small
 \begin{tabularx}{\linewidth}{p{0.20\linewidth}p{0.18\linewidth}X}
@@ -144,7 +151,7 @@ JobMatch AI is a browser-based application backed by a Python FastAPI server. Th
 \midrule
 LLM               & Gemma-3/4 (Google)   & All generative tasks: matching, cover letters, tailoring, email drafting. \\
 Vector store      & Pinecone Serverless   & Stores job embeddings; serves cosine-similarity retrieval queries. \\
-Embedding         & SHA-256 hash, 768-dim & Deterministic lexical embedding of job text and user profile queries. \\
+Embedding         & OpenAI \texttt{text-embedding-3-small} (1536-dim) & Neural semantic embeddings of job text and user profile queries. \\
 Backend           & FastAPI (Python)      & RAG orchestration, safety checks, auth, and API surface. \\
 Persistence       & SQLite / aiosqlite    & User bookmarks, application states, feedback, and resume records. \\
 Resume parsing    & pdfplumber            & Extracts raw text from uploaded PDF resumes. \\
@@ -163,7 +170,7 @@ Email             & Resend                & Delivers AI-generated job results an
 
 The RAG pipeline is the core of the system. Every job recommendation the user sees is the output of this pipeline, not a response generated purely from the model's parametric knowledge. The pipeline is designed so that Gemma is always conditioned on retrieved, real job postings from the indexed corpus. This prevents hallucination of non-existent roles and grounds the model's explanations in actual job descriptions.
 
-The pipeline runs end-to-end on every recommendation request. Only the Gemma generation step is non-deterministic; all prior stages are deterministic and produce the same output for the same input, making the system debuggable and testable.
+The pipeline runs end-to-end on every recommendation request. Gemma generation is non-deterministic; retrieval and reranking are stable given the same inputs and embedding model, making the system debuggable and testable.
 
 \vspace{8pt}
 \begin{center}
@@ -222,9 +229,9 @@ Canonicalisation ensures retrieval stability: paraphrased inputs that express th
 
 \subsection{Step 3: Pinecone Vector Retrieval}
 
-Each job posting in the corpus is pre-embedded as a 768-dimensional vector using a deterministic SHA-256 hash embedding function. The function maps each token in the job's concatenated text (role, company, location, skills, description) to two fixed positions in the vector via the token's digest bytes. The resulting sparse vector is L2-normalised and stored in Pinecone.
+Each job posting in the corpus is embedded as a 1536-dimensional vector using OpenAI \texttt{text-embedding-3-small}. We embed a concatenation of structured job fields (role, company, location, skills, description), L2-normalise the result, and store it in Pinecone.
 
-At query time, the canonical query is embedded using the same function and submitted to Pinecone for cosine-similarity search, returning the top-20 candidates. Because the embedding is hash-based rather than neural, it captures lexical overlap rather than semantic similarity: two phrases such as ``ML engineer'' and ``machine learning engineer'' produce zero cosine overlap since they share no token. This explains observed cosine scores in the 0.17--0.45 range, lower than the 0.6--0.9 typical of neural models. The tradeoff is full determinism and zero inference cost at embedding time.
+At query time, the canonical query is embedded using the same model and submitted to Pinecone for cosine-similarity search, returning the top-20 candidates. Because the embedding is semantic rather than token-hash based, retrieval is more robust to paraphrases and synonymy (e.g., ``ML engineer'' vs.\ ``machine learning engineer''), potentially improving retrieval quality beyond literal keyword overlap.
 
 \subsection{Step 4: Keyword Reranking}
 
@@ -244,7 +251,7 @@ Because the candidate list is passed explicitly as context, Gemma cannot recomme
 
 \subsection{Prompt Design and Safety}
 
-The system prompt is carefully structured to produce consistent, parseable output. It specifies the expected markdown schema, instructs the model not to invent job details beyond what appears in the context, and explicitly disallows any preamble or explanatory text outside the defined format. This prompt engineering is what produces the Format Consistency score of 0.75 observed in evaluation: six of eight format rules pass at 100\%, with the two failures attributable to Gemma occasionally folding the company name and location into the job heading rather than listing them as separate bold fields.
+The system prompt is carefully structured to produce consistent, parseable output. It specifies the expected markdown schema, instructs the model not to invent job details beyond what appears in the context, and explicitly disallows any preamble or explanatory text outside the defined format. This prompt engineering contributes to the Format Consistency score of 0.75 observed in evaluation: six of eight format rules pass at 100\%, with the remaining failures attributable to LLM formatting variability (e.g., Gemma occasionally folding the company name and location into the job heading rather than listing them as separate bold fields). Stricter parsing or schema enforcement would likely improve this metric.
 
 Prompt injection safety is enforced at the canonicalisation stage and again at the generation stage. Patterns such as ``ignore previous instructions'' or ``disregard the above'' are detected and removed from all user-controlled inputs before they reach the prompt.
 
@@ -368,7 +375,7 @@ New jobs added through the admin panel are embedded and indexed immediately with
 
 19 evaluation records were collected from 10 distinct user profiles run through the live pipeline. Each record logs the canonical query, the pre- and post-rerank candidate lists (20 each), the complete Gemma output, retrieval latency, and generation latency, all stored in \texttt{eval\_log.jsonl}.
 
-Standard frameworks (RAGAS, DeepEval) were not used because they require annotated QA pairs and semantic embedding similarity, neither of which applies to this system's hash-based retrieval. Instead, three relevance proxies are used: (1) Gemma match scores as graded relevance for NDCG; (2) Pinecone cosine scores with a relative median threshold for Precision@K; and (3) user feedback ratings (none collected in this run, so feedback-based metrics are omitted).\footnote{Recall@K, Hit@K, MRR, and MAP@K all require user ratings. Even 20 to 30 rated sessions would enable these metrics.}
+Standard RAG evaluation frameworks (e.g., RAGAS, DeepEval) were not applied because this task is a recommendation setting without ground-truth relevance judgments for retrieved items. Instead, we report proxy metrics based on signals available from the pipeline: (1) Gemma-generated match scores as graded relevance for NDCG (not independent ground truth, so this metric is partially self-referential); (2) Precision@K computed using a relative cosine-similarity threshold over the retrieved set (a proxy, not human-annotated relevance); and (3) generation-level checks such as faithfulness and format consistency. The evaluation is therefore preliminary due to both the small sample size (19 runs, 10 profiles) and the absence of labeled relevance data.\footnote{Recall@K, Hit@K, MRR, and MAP@K require relevance judgments or labeled data (e.g., human-annotated relevance) to compute reliably.}
 
 \begin{table}[H]
 \centering\small
@@ -414,7 +421,7 @@ NDCG@K without reranking         & 0.6960 & 0.7075 & 0.6900 & 0.6887 \\
 
 \subsection{Reranking Ablation}
 
-The keyword reranker decreases NDCG slightly at small K (--0.03 at K=3) but converges at K=10 and marginally outperforms the baseline at K=20. The reranker is designed to promote profile-aligned candidates that Pinecone scored lower due to vocabulary mismatch; the cost is occasionally displacing a Gemma-preferred job from positions 1--3.
+The keyword reranker does not improve NDCG at small K (K=3, K=5) and converges at K=10, with only a marginal difference at K=20. In this setting, the reranker should be interpreted as improving profile alignment and encouraging diversity in the surfaced options, rather than as a consistent improvement in ranking quality.
 
 \begin{table}[H]
 \centering\small
@@ -439,9 +446,9 @@ The keyword reranker decreases NDCG slightly at small K (--0.03 at K=3) but conv
 \toprule
 \textbf{Metric} & \textbf{Value} & \textbf{Notes} \\
 \midrule
-Format Consistency  & 0.75 / 1.0  & 6 of 8 format rules pass at 100\%; 2 fail because Gemma folds company/location into the job heading. \\
+Format Consistency  & 0.75 / 1.0  & 6 of 8 format rules pass at 100\%; 2 fail due to LLM formatting variability (Gemma folds company/location into the job heading). \\
 Faithfulness        & 1.00 / 1.0  & Every recommended job was present in the retrieved candidate set across all 19 runs. \\
-LLM Match Score     & 4.74 / 10   & std = 0.99; scores concentrate in the 3--6 range, reflecting lexical retrieval limitations. \\
+LLM Match Score     & 4.74 / 10   & std = 0.99; scores concentrate in the 3--6 range, reflecting varied fit across profiles and conservative scoring. \\
 \midrule
 Retrieval latency   & 2,140 ms    & std = 2,083 ms; high variance from Pinecone cold-start on first query per session. \\
 Generation latency  & 30,153 ms   & std = 966 ms; Gemma API call dominates end-to-end time. \\
@@ -468,11 +475,11 @@ Location diversity  & 0.4000      & Moderate; results cluster around a small num
 
 \subsection{Discussion}
 
-\textbf{Faithfulness is the most important result.} A score of 1.0 across all 19 runs confirms that the RAG architecture works as intended: Gemma never recommended a job outside the retrieved set. In a job-recommendation context this is critical, since a hallucinated posting would send a candidate to a non-existent application link.
+\textbf{Faithfulness is the most important result.} A score of 1.0 across all 19 runs provides strong evidence that the RAG architecture works as intended in this evaluation: Gemma never recommended a job outside the retrieved set. In a job-recommendation context this is critical, since a hallucinated posting would send a candidate to a non-existent application link.
 
-\textbf{Retrieval quality is bounded by hash embeddings.} Precision@5 = 1.0 shows that the top-5 retrieved candidates are consistently above median relevance. NDCG@10 = 0.69 reflects a good but not optimal ranking. The mean Gemma match score of 4.74/10 reveals the underlying limitation: hash embeddings cannot bridge vocabulary gaps between the query and the job description, so retrieved jobs are lexically similar but not always semantically optimal. Replacing hash embeddings with a neural model would directly raise both NDCG and match scores.
+\textbf{Retrieval quality is measured with proxies.} Precision@5 = 1.0 indicates that the top-5 retrieved candidates are consistently above the run-specific cosine threshold, but this is not equivalent to human relevance. NDCG@10 = 0.69 provides a coarse signal and should be interpreted cautiously because it uses Gemma-generated match scores as graded relevance (i.e., it is partially self-referential). Using semantic embeddings (\texttt{text-embedding-3-small}) can improve robustness to paraphrases and synonymy, but fully reliable ranking evaluation would require labeled relevance judgments.
 
-\textbf{Reranker adds diversity, not ranking quality.} The ablation shows the reranker has near-zero impact on NDCG at K=10, confirming that its value lies in surface-level profile alignment and result diversity rather than raw ranking quality.
+\textbf{Reranker improves alignment and diversity, not NDCG at small K.} The ablation shows that reranking does not improve NDCG at K=3 or K=5 and has near-zero impact by K=10. This suggests the reranker's value is primarily in profile alignment and result diversity, rather than consistent gains in ranking quality under the proxy NDCG signal.
 
 \textbf{Latency.} Generation (~30 s) dominates retrieval (~2 s). The high retrieval standard deviation is driven by Pinecone cold-start on the first query of a session.
 
@@ -492,7 +499,7 @@ Location diversity  & 0.4000      & Moderate; results cluster around a small num
 \texttt{has\_location\_field}          & 0.00 \\
 \bottomrule
 \end{tabular}
-\caption{Per-rule format pass rates. The two failing rules reflect a Gemma style choice, not a structural failure.}
+\caption{Per-rule format pass rates. The two failing rules reflect LLM formatting variability, not a structural failure; stricter schema enforcement or more robust parsing would likely reduce these failures.}
 \end{table}
 
 %% ─────────────────────────────────────────────────────────────────────────────
@@ -500,9 +507,9 @@ Location diversity  & 0.4000      & Moderate; results cluster around a small num
 %% ─────────────────────────────────────────────────────────────────────────────
 \section{Limitations}
 
-\textbf{Hash embedding quality.} The SHA-256 embedding cannot bridge vocabulary gaps. A query mentioning ``ML'' will not retrieve a posting that only uses ``machine learning'', even though they refer to the same skill. This is the single largest ceiling on retrieval quality and Gemma match scores.
+\textbf{Missing relevance labels.} The evaluation lacks human-annotated relevance judgments for retrieved jobs, so retrieval metrics rely on proxies (cosine thresholds and model-generated match scores) rather than ground-truth labels.
 
-\textbf{No user feedback data.} Feedback-based metrics (Recall@K, MRR, MAP@K) require user ratings, which were not collected during this evaluation run. The system has a feedback endpoint; populating it with even 20--30 rated sessions would unlock a meaningful additional evaluation dimension.
+\textbf{No labeled feedback data.} Feedback-based metrics (Recall@K, MRR, MAP@K) require relevance judgments or labeled data, which were not collected during this evaluation run. The system has a feedback endpoint; populating it with even 20--30 labeled sessions would unlock a meaningful additional evaluation dimension.
 
 \textbf{Self-evaluation bias in match scores.} Gemma assigns match scores to its own recommendations. A model may score its own output more favourably than an independent judge would. The LLM-as-judge metric (a separate judge prompt) would partially address this but was not run due to API cost.
 
@@ -513,13 +520,13 @@ Location diversity  & 0.4000      & Moderate; results cluster around a small num
 %% ─────────────────────────────────────────────────────────────────────────────
 \section{Future Scope}
 
-The highest-impact improvement is replacing SHA-256 hash embeddings with a pre-trained neural model such as \texttt{text-embedding-3-small} or \texttt{all-MiniLM-L6-v2}. This single change would improve semantic retrieval, raise NDCG and Gemma match scores, and benefit every downstream AI feature, since all of them depend on the quality of the retrieved context.
+The highest-impact improvement is adding a small labeled evaluation set with human relevance judgments for retrieved jobs. This would enable standard ranking metrics (e.g., Recall@K, MRR, MAP@K) and allow proxy thresholds to be calibrated more rigorously. On the retrieval side, hybrid retrieval and query expansion can further improve recall and diversity even with semantic embeddings (\texttt{text-embedding-3-small}).
 
 Additional improvements worth pursuing:
 
 \begin{itemize}
   \item \textbf{Hybrid retrieval:} combine Pinecone vector search with BM25 keyword ranking for complementary coverage.
-  \item \textbf{Feedback loop:} collect user ratings and use them for personalised reranking and ongoing evaluation.
+  \item \textbf{Feedback loop:} collect relevance labels (e.g., user ratings) and use them for personalised reranking and ongoing evaluation.
   \item \textbf{Agentic resume editing:} allow Gemma to iteratively refine the resume against a job description over multiple turns rather than producing a one-shot tailoring report.
   \item \textbf{Interview preparation:} generate likely interview questions based on the job description and the candidate's resume gaps.
   \item \textbf{ATS formatting:} produce downloadable, ATS-compatible resume exports alongside the tailoring analysis.
@@ -532,7 +539,7 @@ Additional improvements worth pursuing:
 
 JobMatch AI is a grounded, full-stack generative AI application built around a RAG pipeline. The system uses Gemma for five distinct AI tasks, all conditioned on retrieved job data or the candidate's resume: job match explanation, cover letter generation, resume tailoring, keyword-gap analysis, and recruiter email drafting. The RAG architecture ensures that every recommended job exists in the indexed corpus, confirmed by a Faithfulness score of 1.0 across all 19 evaluation runs.
 
-Retrieval quality is currently bounded by the hash-based embedding strategy. Precision@5 = 1.0 shows that the top candidates are consistently above-median relevance, and NDCG@10 = 0.69 reflects reasonable ranking quality given the lexical retrieval constraint. Replacing hash embeddings with a neural model is the clearest path to meaningfully better retrieval and higher Gemma match scores.
+Retrieval uses semantic embeddings (\texttt{text-embedding-3-small}) and the end-to-end evaluation suggests reasonable retrieval behaviour under proxy metrics. Precision@5 = 1.0 indicates strong performance relative to the run-specific cosine threshold, while NDCG@10 = 0.69 provides a coarse, partially self-referential signal because it is based on Gemma-generated match scores rather than independent relevance labels.
 
 The project demonstrates that RAG is not just a retrieval trick: when combined with a capable language model and thoughtful prompt design, it enables a family of grounded generative features that would be impossible, or unsafe, without the retrieved context.
 

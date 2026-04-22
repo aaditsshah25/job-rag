@@ -12,6 +12,8 @@ def make_client():
     backend.DB_PATH = str(db_path)
     backend.OPENAI_API_KEY = ""
     backend.PINECONE_API_KEY = ""
+    backend.GOOGLE_API_KEY = ""
+    backend.ENABLE_LLM_JOB_RANKING = False
     backend.JOBMATCH_API_KEY = ""
     backend._browse_cache["jobs"] = []
     backend._browse_cache["fetched_at"] = 0.0

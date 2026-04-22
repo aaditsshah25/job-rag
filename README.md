@@ -15,9 +15,11 @@ cp .env.example .env
 
 2. Fill required keys in `.env`:
 - `GOOGLE_API_KEY`
+- `OPENAI_API_KEY` (for embeddings)
 - `PINECONE_API_KEY`
 - `JOBMATCH_API_KEY` (recommended)
 - Optional: `GEMMA_CHAT_MODEL` (defaults to `gemma-3-27b-it`)
+- Optional: `ENABLE_LLM_JOB_RANKING` (defaults to enabled when `GOOGLE_API_KEY` is set)
 - Optional (Admin panel): `ADMIN_EMAILS` (comma-separated allowlist)
 
 Gemma-only mode is enforced. Non-Gemma model names are ignored.

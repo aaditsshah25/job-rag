@@ -52,6 +52,7 @@ from dotenv import load_dotenv
 import httpx as _httpx
 genai = None  # SDK not used; we call Gemini via REST
 _GENAI_AVAILABLE = True  # always available via HTTP
+from openai import OpenAI
 from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
 import aiosqlite
@@ -117,8 +118,20 @@ PINECONE_API_KEY  = os.getenv("PINECONE_API_KEY", "")
 PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
+OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
+EMBED_MODEL       = "text-embedding-3-small"
 VECTOR_DIM        = int(os.getenv("VECTOR_DIM", "1536"))
-EMBEDDING_PROVIDER = "local_hash_v1"
+EMBEDDING_PROVIDER = "openai_text-embedding-3-small"
+_openai_client = None
+
+
+def get_openai() -> OpenAI:
+    global _openai_client
+    if _openai_client is None:
+        if not OPENAI_API_KEY:
+            raise RuntimeError("OPENAI_API_KEY is not set.")
+        _openai_client = OpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client
 _DEFAULT_GEMMA_MODEL = "gemma-3-27b-it"
 _configured_chat_model = os.getenv("GEMMA_CHAT_MODEL", _DEFAULT_GEMMA_MODEL).strip() or _DEFAULT_GEMMA_MODEL
 CHAT_MODEL        = _configured_chat_model if _configured_chat_model.lower().startswith("gemma-") else _DEFAULT_GEMMA_MODEL
@@ -130,7 +143,8 @@ if CHAT_MODEL != _configured_chat_model:
     )
 TOP_K             = int(os.getenv("TOP_K", "20"))
 TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
-ENABLE_LLM_JOB_RANKING = os.getenv("ENABLE_LLM_JOB_RANKING", "0").strip().lower() in {"1", "true", "yes", "on"}
+_DEFAULT_ENABLE_LLM_JOB_RANKING = "1" if GOOGLE_API_KEY else "0"
+ENABLE_LLM_JOB_RANKING = os.getenv("ENABLE_LLM_JOB_RANKING", _DEFAULT_ENABLE_LLM_JOB_RANKING).strip().lower() in {"1", "true", "yes", "on"}
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
 CSV_PATH          = os.getenv(
     "CSV_PATH",
@@ -1933,7 +1947,7 @@ def _index_admin_jobs_incremental(jobs: list[dict]) -> int:
     Upsert only the given admin jobs into Pinecone WITHOUT wiping the existing index.
     Each job is split into text chunks; each chunk becomes a separate vector.
     """
-    if not jobs or not PINECONE_API_KEY:
+    if not jobs or not OPENAI_API_KEY or not PINECONE_API_KEY:
         return 0
     index = get_or_create_index()
 
@@ -1962,8 +1976,13 @@ def _index_admin_jobs_incremental(jobs: list[dict]) -> int:
             "source": job.get("source", "admin_upload"),
             "external_url": job.get("external_url", ""),
         }
-        for c_idx, chunk_text in enumerate(chunks):
-            emb = _hash_embed_text(chunk_text)
+        try:
+            chunk_embeddings = embed_texts(chunks)
+        except Exception as exc:
+            log.warning("Admin incremental embedding failed; skipping job '%s' (%s)", job.get("title", ""), exc)
+            continue
+
+        for c_idx, (chunk_text, emb) in enumerate(zip(chunks, chunk_embeddings)):
             vid = _admin_vector_id(job, c_idx)
             meta = {**base_meta, "chunk_index": c_idx, "total_chunks": len(chunks)}
             vectors.append({"id": vid, "values": emb, "metadata": meta})
@@ -2044,7 +2063,23 @@ def get_or_create_index():
     return client.Index(PINECONE_INDEX)
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    return [_hash_embed_text(text) for text in texts]
+    max_attempts = 3
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = get_openai().embeddings.create(model=EMBED_MODEL, input=texts)
+            return [r.embedding for r in resp.data]
+        except Exception as exc:
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+            backoff_seconds = 1.5 ** attempt
+            log.warning(
+                "Embedding request failed (attempt %d/%d): %s; retrying in %.1fs",
+                attempt, max_attempts, exc, backoff_seconds,
+            )
+            time.sleep(backoff_seconds)
+    raise RuntimeError(f"Embedding failed after {max_attempts} attempts: {last_error}")
 
 def index_dataset(force: bool = False) -> int:
     global _last_source_stats
@@ -2862,16 +2897,28 @@ def _is_renderable_jobmatch_output(text: str) -> bool:
     return has_heading or has_job_blocks
 
 
+def _llm_job_ranking_enabled() -> bool:
+    return bool(GOOGLE_API_KEY) and _GENAI_AVAILABLE and ENABLE_LLM_JOB_RANKING
+
+
 def generate_response(user_query: str, candidates: list[dict], history: list = None, resume_text: str = "") -> str:
-    ranked_candidates = rank_candidates_deterministically(user_query, candidates)
-    if not GOOGLE_API_KEY or not _GENAI_AVAILABLE or not ENABLE_LLM_JOB_RANKING:
-        return _basic_jobmatch_markdown(
-            ranked_candidates,
-            "Results use deterministic retrieval ranking for repeatable job matches.",
-        )
+    # Candidates are already retrieved and may have been reranked upstream.
+    candidates_for_llm = candidates
+    ranked_candidates = rank_candidates_deterministically(user_query, candidates_for_llm)
+    if not _llm_job_ranking_enabled():
+        note = "Results use deterministic retrieval ranking for repeatable job matches."
+        if not GOOGLE_API_KEY:
+            note = "GOOGLE_API_KEY is not configured, so results use deterministic retrieval ranking."
+        elif not ENABLE_LLM_JOB_RANKING:
+            note = "ENABLE_LLM_JOB_RANKING is disabled, so results use deterministic retrieval ranking."
+        return _basic_jobmatch_markdown(ranked_candidates, note)
 
     system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
-    user_msg = build_llm_prompt(_clean_untrusted_text(user_query, 2400), ranked_candidates[:10], resume_text=resume_text)
+    user_msg = build_llm_prompt(
+        _clean_untrusted_text(user_query, 2400),
+        candidates_for_llm[:10],
+        resume_text=resume_text,
+    )
     full_prompt = f"{system}\n\n{user_msg}"
     # Gemma 4 uses a reasoning/thinking mode and needs more tokens (thinking + output)
     max_tokens = 4096 if CHAT_MODEL in _GEMMA4_MODELS else 1500
@@ -3129,7 +3176,7 @@ async def debug_rag_trace(request: Request, req: DebugRetrievalRequest):
         "prompt_version": "jobmatch_markdown_v2",
         "chat_model": CHAT_MODEL,
         "embedding_provider": EMBEDDING_PROVIDER,
-        "llm_job_ranking_enabled": ENABLE_LLM_JOB_RANKING,
+        "llm_job_ranking_enabled": _llm_job_ranking_enabled(),
         "prompt_injection_detected": _contains_prompt_injection(raw_query),
         "retrieval_fingerprint": _retrieval_fingerprint(candidates),
         "retrieved_count": len(candidates),
