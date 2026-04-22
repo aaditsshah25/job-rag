@@ -225,20 +225,21 @@
           <div class="form-row two-col">
             <div class="form-group">
               <label for="desiredRole">Job Role</label>
-              <input type="text" id="desiredRole" placeholder="e.g. Data Analyst" list="jobTitleList" />
+              <input type="text" id="desiredRole" placeholder="e.g. Software Engineer" list="jobTitleList" />
               <datalist id="jobTitleList"></datalist>
             </div>
             <div class="form-group">
               <label for="location">Location</label>
-              <input type="text" id="location" placeholder="e.g. New York, Remote" autocomplete="off" />
+              <input type="text" id="location" placeholder="e.g. Bangalore, Hyderabad, Pune" list="jobLocationList" autocomplete="off" />
+              <datalist id="jobLocationList"></datalist>
             </div>
           </div>
 
           <!-- Row 2: Min Salary + Work Type -->
           <div class="form-row two-col">
             <div class="form-group">
-              <label for="salaryMin">Min Salary (USD/yr)</label>
-              <input type="number" id="salaryMin" placeholder="e.g. 50000" min="0" step="5000" />
+              <label for="salaryMin">Min Salary (INR/yr)</label>
+              <input type="number" id="salaryMin" placeholder="e.g. 800000" min="0" step="50000" />
             </div>
             <div class="form-group">
               <label for="workType">Work Type</label>
@@ -269,7 +270,7 @@
           <div class="form-group">
             <label for="additional">Additional Comments</label>
             <textarea id="additional" rows="3"
-              placeholder="e.g. I prefer startups, open to relocation, need visa sponsorship..."></textarea>
+              placeholder="e.g. Prefer backend or cloud roles in Bangalore/Hyderabad, open to Pune or remote..."></textarea>
           </div>
         </div>
 
@@ -352,7 +353,7 @@
           </div>
           <!-- Row 2: filters + buttons -->
           <div class="browse-filter-row">
-            <input id="browseLocationFilter" class="browse-filter-input" type="text" placeholder="City or country…" autocomplete="off" />
+            <input id="browseLocationFilter" class="browse-filter-input" type="text" placeholder="Bangalore, Hyderabad, Pune..." list="jobLocationList" autocomplete="off" />
             <select id="browseIndustryFilter" class="browse-filter-select">
               <option value="">All Industries</option>
               <option value="IT Jobs">IT Jobs</option>
