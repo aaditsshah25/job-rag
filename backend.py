@@ -872,6 +872,13 @@ async def init_db():
 # ─── Lifespan ─────────────────────────────────────────
 async def _background_startup():
     """Run slow startup tasks after the app is already serving requests."""
+    log.info("CSV_PATH=%s exists=%s", CSV_PATH, os.path.isfile(CSV_PATH))
+    log.info("JOBS_DATA_PATH=%s exists=%s", JOBS_DATA_PATH, os.path.isfile(JOBS_DATA_PATH))
+    data_dir = os.path.join(os.path.dirname(__file__), "data")
+    try:
+        log.info("data/ contents: %s", os.listdir(data_dir))
+    except Exception as e:
+        log.warning("Cannot list data/: %s", e)
     try:
         seeded = await _seed_jobs_from_existing_sources()
         if seeded:
@@ -2504,7 +2511,7 @@ def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
             return db_scored
 
     df = get_csv_df()
-    if df.empty:
+    if df is None or df.empty:
         return []
 
     csv_jobs = [clean_row(df.iloc[i]) for i in range(len(df))]
@@ -2512,14 +2519,13 @@ def _search_jobs_local_csv(query: str, top_k: int = TOP_K) -> list[dict]:
     if scored:
         return scored
 
-    if not scored:
-        # Ensure graceful degradation: if query tokens are too specific, still return broad options.
-        fallback = []
-        limit = max(1, top_k)
-        for i in range(min(len(df), limit)):
-            job = clean_row(df.iloc[i])
-            fallback.append({"score": 0.01, **job, "source": "local_csv_fallback_broad"})
-        return fallback
+    # Ensure graceful degradation: if query tokens are too specific, still return broad options.
+    fallback = []
+    limit = max(1, top_k)
+    for i in range(min(len(df), limit)):
+        job = clean_row(df.iloc[i])
+        fallback.append({"score": 0.01, **job, "source": "local_csv_fallback_broad"})
+    return fallback
 
 
 def _extract_resume_basics(text: str) -> dict:
@@ -3233,7 +3239,7 @@ async def readiness():
     csv_rows = 0
     try:
         df = get_csv_df()
-        csv_rows = 0 if df.empty else int(len(df))
+        csv_rows = 0 if df is None or df.empty else int(len(df))
     except Exception:
         csv_rows = 0
 
