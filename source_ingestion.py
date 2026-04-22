@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import logging
+import time
 from typing import Any
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -196,7 +197,7 @@ def fetch_usajobs(max_items: int = 150) -> list[dict[str, Any]]:
     return out
 
 
-def fetch_adzuna(max_items: int = 300) -> list[dict[str, Any]]:
+def fetch_adzuna(max_items: int | None = None) -> list[dict[str, Any]]:
     app_id = os.getenv("ADZUNA_APP_ID", "")
     app_key = os.getenv("ADZUNA_APP_KEY", "")
     country = os.getenv("ADZUNA_COUNTRY", "us")
@@ -206,13 +207,15 @@ def fetch_adzuna(max_items: int = 300) -> list[dict[str, Any]]:
     # Adzuna returns up to 50 listings per page.
     results_per_page = max(1, min(int(os.getenv("ADZUNA_RESULTS_PER_PAGE", "50")), 50))
     max_pages = max(1, int(os.getenv("ADZUNA_MAX_PAGES", "6")))
+    target_items = max_items if max_items is not None else int(os.getenv("ADZUNA_MAX_ITEMS", "300"))
+    request_delay = max(0.0, float(os.getenv("ADZUNA_REQUEST_DELAY_SECONDS", "0")))
     what = quote(os.getenv("ADZUNA_WHAT", "software engineer"))
     where = quote(os.getenv("ADZUNA_WHERE", "united states"))
     out: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
 
     for page in range(1, max_pages + 1):
-        if len(out) >= max_items:
+        if len(out) >= target_items:
             break
         url = (
             f"https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
@@ -220,6 +223,8 @@ def fetch_adzuna(max_items: int = 300) -> list[dict[str, Any]]:
             f"&what={what}&where={where}&content-type=application/json"
         )
         payload = _get_json(url)
+        if request_delay and page < max_pages:
+            time.sleep(request_delay)
         results = payload.get("results", [])
         if not results:
             break
@@ -250,7 +255,7 @@ def fetch_adzuna(max_items: int = 300) -> list[dict[str, Any]]:
                     },
                 )
             )
-            if len(out) >= max_items:
+            if len(out) >= target_items:
                 break
     return out
 
