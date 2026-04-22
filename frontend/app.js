@@ -591,6 +591,15 @@ if (jobTitleList && typeof JOB_TITLES !== 'undefined') {
   });
 }
 
+const jobLocationList = document.getElementById('jobLocationList');
+if (jobLocationList && typeof JOB_LOCATIONS !== 'undefined') {
+  JOB_LOCATIONS.forEach(location => {
+    const option = document.createElement('option');
+    option.value = location;
+    jobLocationList.appendChild(option);
+  });
+}
+
 // skillTags array — populated from resume parse, not from UI
 const skillTags = [];
 
@@ -757,7 +766,7 @@ function buildPrompt(p) {
   if (p.workType && p.workType !== 'Any') prompt += `Work Type Preference: ${p.workType}\n`;
 
   if (p.salaryMin) {
-    prompt += `Minimum Salary: $${Number(p.salaryMin).toLocaleString()} per year\n`;
+    prompt += `Minimum Salary: INR ${Number(p.salaryMin).toLocaleString('en-IN')} per year\n`;
   }
 
   if (p.companySize && p.companySize !== 'Any') {

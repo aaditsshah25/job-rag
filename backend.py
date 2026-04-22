@@ -929,7 +929,7 @@ def build_query_from_profile(profile: UserProfile) -> str:
     if profile.workType and profile.workType != "Any":
         parts.append(f"Work Type: {_clean_untrusted_text(profile.workType, 80)}")
     if profile.salaryMin:
-        parts.append(f"Minimum Salary: {profile.salaryMin}")
+        parts.append(f"Minimum Salary: INR {profile.salaryMin:,}/yr")
     if profile.companySize and profile.companySize != "Any":
         parts.append(f"Company Size: {profile.companySize}")
     if profile.workAuth and profile.workAuth != "Not Specified":
@@ -2070,6 +2070,19 @@ def _extract_salary_min(salary_str: str) -> float:
     return amount
 
 def _parse_salary_min_from_query(query: str) -> float:
+    normalized = (query or "").lower().replace(",", "")
+    m = re.search(r"\b(?:inr|rs\.?|rupees?)\s*(\d+(?:\.\d+)?)\s*(lpa|lakhs?|lacs?|k)?\b", normalized)
+    if m:
+        val = float(m.group(1))
+        unit = (m.group(2) or "").lower()
+        if unit in {"lpa", "lakh", "lakhs", "lac", "lacs"}:
+            return val * 100000
+        if unit == "k":
+            return val * 1000
+        return val * 100000 if val < 100 else val
+    m = re.search(r"\b(\d+(?:\.\d+)?)\s*(lpa|lakhs?|lacs?)\b", normalized)
+    if m:
+        return float(m.group(1)) * 100000
     m = re.search(r"\$\s*([\d,]+)\s*[Kk]", query)
     if m:
         return float(m.group(1).replace(",", "")) * 1000
