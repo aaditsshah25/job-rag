@@ -54,6 +54,14 @@ from pinecone import Pinecone, ServerlessSpec
 from cachetools import TTLCache
 import aiosqlite
 try:
+    from eval_logger import log_eval_record as _log_eval_record
+    _EVAL_LOGGER_AVAILABLE = True
+except Exception:
+    _EVAL_LOGGER_AVAILABLE = False
+    def _log_eval_record(**kwargs):  # type: ignore[misc]
+        pass
+
+try:
     from source_ingestion import fetch_configured_sources_with_stats, get_source_config
     _SOURCE_INGESTION_AVAILABLE = True
 except Exception:
@@ -1914,13 +1922,17 @@ async def webhook(request: Request):
     session_id = req.sessionId or str(uuid.uuid4())
     history = get_session_history(session_id)
     profile_salary_min = req.profile.salaryMin if req.profile else None
+    _t_retrieval_start = time.perf_counter()
     try:
         candidates = search_jobs_cached(query, top_k=TOP_K, profile_salary_min=profile_salary_min)
     except Exception as exc:
         log.exception("Vector search failed")
         raise HTTPException(status_code=503, detail=f"Search unavailable: {exc}")
+    _retrieval_latency_ms = (time.perf_counter() - _t_retrieval_start) * 1000
     if not candidates:
         return WebhookResponse(output="No matching jobs found. Please try different search terms.")
+
+    candidates_before_rerank = [dict(c) for c in candidates]
 
     # Rerank candidates using profile signals before sending to Gemma
     profile_for_rerank = req.profile if req.profile else None
@@ -1930,10 +1942,26 @@ async def webhook(request: Request):
     try:
         # Run blocking Gemma call in a thread so the async event loop stays healthy
         resume_text = (req.profile.resumeText if req.profile else None) or req.resumeText or ""
+        _t_gen_start = time.perf_counter()
         output = await asyncio.to_thread(generate_response, query, candidates, history, resume_text)
+        _generation_latency_ms = (time.perf_counter() - _t_gen_start) * 1000
     except Exception as exc:
         log.exception("LLM generation failed")
         raise HTTPException(status_code=503, detail=f"AI service unavailable: {exc}")
+
+    try:
+        _log_eval_record(
+            profile=req.profile,
+            query=query,
+            candidates_before_rerank=candidates_before_rerank,
+            candidates_after_rerank=candidates,
+            llm_output=output,
+            retrieval_latency_ms=_retrieval_latency_ms,
+            generation_latency_ms=_generation_latency_ms,
+        )
+    except Exception:
+        pass
+
     save_session_turn(session_id, query, output)
     log.info("[%s] /webhook done, session=%s", request_id, session_id)
     return WebhookResponse(output=output)
