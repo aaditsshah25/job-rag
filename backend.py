@@ -125,10 +125,9 @@ PINECONE_INDEX    = os.getenv("PINECONE_INDEX", "job-listings1")
 PINECONE_CLOUD    = os.getenv("PINECONE_CLOUD", "aws")
 PINECONE_REGION   = os.getenv("PINECONE_REGION", "us-east-1")
 OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
-EMBED_MODEL       = "text-embedding-3-small"
-VECTOR_DIM        = int(os.getenv("VECTOR_DIM", "1536"))
 EMBED_MODEL       = os.getenv("OPENAI_EMBED_MODEL", "text-embedding-3-small").strip() or "text-embedding-3-small"
-EMBEDDING_PROVIDER = f"openai:{EMBED_MODEL}"
+VECTOR_DIM        = int(os.getenv("VECTOR_DIM", "1536"))
+EMBEDDING_PROVIDER = f"openai_{EMBED_MODEL}"
 _openai_client = None
 
 
