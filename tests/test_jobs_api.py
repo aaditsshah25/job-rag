@@ -1,4 +1,5 @@
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ def make_client():
     db_path = tmp_dir / f"jobmatch-test-{uuid4().hex}.db"
     backend.DB_PATH = str(db_path)
     backend.OPENAI_API_KEY = ""
+    backend.GOOGLE_API_KEY = ""
     backend.PINECONE_API_KEY = ""
     backend.GOOGLE_API_KEY = ""
     backend.ENABLE_LLM_JOB_RANKING = False
@@ -102,6 +104,56 @@ def test_resume_quality_gate_rejects_repeated_prompt_junk_and_accepts_real_resum
     resume_report = backend._resume_quality_report(resume)
     assert resume_report["looks_like_resume"] is True
     assert resume_report["prompt_injection_detected"] is False
+
+
+def test_resume_quality_gate_rejects_obvious_non_resume_presentation():
+    presentation = """
+    Quarterly Market Strategy Presentation
+    Agenda
+    Slide 1: Market overview
+    Slide 2: Consumer trends and campaign ideas
+    Slide 3: Budget allocation by channel
+    Thank you slide
+    This presentation summarizes brand positioning, audience segments, and media plans.
+    """
+
+    report = backend._resume_quality_report(presentation)
+    assert report["looks_like_resume"] is False
+    assert report["verdict"] in {"reject", "uncertain"}
+    assert any("unrelated document signals" in item for item in report["penalties"])
+
+    try:
+        backend._validate_resume_text_or_raise(presentation)
+    except HTTPException as exc:
+        assert exc.status_code == 422
+        assert "resume" in exc.detail["message"].lower()
+    else:
+        raise AssertionError("Expected non-resume presentation to be rejected")
+
+
+def test_resume_quality_gate_accepts_student_resume_without_full_work_history():
+    resume = """
+    Aarav Mehta
+    aarav.mehta@example.com
+    Education
+    Bachelor of Business Analytics, Sample University, 2025
+    Projects
+    Built a sales forecasting dashboard using Python, SQL, Excel, and Tableau.
+    Skills
+    Python, SQL, Excel, Tableau, Power BI
+    Certifications
+    Google Data Analytics Certificate
+    """
+
+    report = backend._resume_quality_report(resume)
+    assert report["looks_like_resume"] is True
+    assert {"education", "projects", "skills"}.issubset(set(report["content_categories"]))
+
+
+def test_parse_salary_formats_as_inr_with_indian_grouping():
+    assert backend._parse_salary("$120000 - $240000") == "INR 1,20,000 - INR 2,40,000"
+    assert backend._parse_salary("12-18 LPA") == "INR 12,00,000 - INR 18,00,000"
+    assert backend._parse_salary("25 lakh per year") == "INR 25,00,000/yr"
 
 
 def test_debug_retrieval_is_stable_across_paraphrases_and_injection():
@@ -230,3 +282,60 @@ def test_admin_csv_upload_inserts_only_new_jobs_and_skips_duplicates():
         backend.ADMIN_EMAILS = original_admins
         if db_path.exists():
             db_path.unlink()
+
+
+def test_generate_response_uses_gemma_when_configured(monkeypatch):
+    calls = []
+
+    def fake_gemma(prompt, temperature=0.3, max_tokens=4096):
+        calls.append(prompt)
+        return """# Your Job Match Results
+
+## Summary
+- Jobs Analyzed: 2
+- Top Matches: 1
+- Best Match Score: 9/10
+
+## Top Job Matches
+
+### Pinecone First @ Alpha
+- Match Score: 9/10 | Location: Mumbai, IN | Salary: Not listed
+- Role: Data Analyst
+- Apply Link: Not provided
+- Job Description: Analyze data.
+
+**Why It Matches:**
+- Python aligns with the user profile
+
+**Gaps:**
+- Not provided
+
+**Experience Alignment:** Suitable.
+
+**Recommended Next Steps:**
+1. Apply.
+"""
+
+    old_google = backend.GOOGLE_API_KEY
+    old_enabled = backend.ENABLE_LLM_JOB_RANKING
+    backend.GOOGLE_API_KEY = "test-google-key"
+    backend.ENABLE_LLM_JOB_RANKING = True
+    monkeypatch.setattr(backend, "_gemini_http_generate", fake_gemma)
+
+    try:
+        output = backend.generate_response(
+            "Roles: data analyst | Skills: python",
+            [
+                {"title": "Pinecone First", "role": "Data Analyst", "company": "Alpha", "score": 0.9},
+                {"title": "Pinecone Second", "role": "Data Analyst", "company": "Beta", "score": 0.8},
+            ],
+            resume_text="Python SQL resume",
+        )
+    finally:
+        backend.GOOGLE_API_KEY = old_google
+        backend.ENABLE_LLM_JOB_RANKING = old_enabled
+
+    assert calls
+    assert output.startswith("# Your Job Match Results")
+    assert "Results use deterministic retrieval ranking" not in output
+    assert "Pinecone First" in calls[0]
