@@ -526,6 +526,8 @@ async def _ensure_table_columns():
             await db.execute("ALTER TABLE bookmarks ADD COLUMN user_email TEXT")
         if not await has_column("applications", "user_email"):
             await db.execute("ALTER TABLE applications ADD COLUMN user_email TEXT")
+        if not await has_column("users", "is_blocked"):
+            await db.execute("ALTER TABLE users ADD COLUMN is_blocked INTEGER NOT NULL DEFAULT 0")
 
         # Backfill users table from existing bookmarks/applications if table was just created empty
         if await has_table("users"):
@@ -3008,15 +3010,20 @@ async def auth_google(req: GoogleAuthRequest):
         raise HTTPException(status_code=401, detail="Google account email is missing")
     name = _safe_str(token_payload.get("name", "")) or email.split("@")[0]
     picture = _safe_str(token_payload.get("picture", ""))
-    access_token = _create_access_token(email, name, picture)
     now = datetime.utcnow().isoformat() + "Z"
     async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT is_blocked FROM users WHERE email = ?", (email,)) as cur:
+            existing = await cur.fetchone()
+        if existing and existing["is_blocked"]:
+            raise HTTPException(status_code=403, detail="Your account has been blocked. Contact the administrator.")
         await db.execute(
-            "INSERT INTO users (email, name, picture, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?) "
+            "INSERT INTO users (email, name, picture, first_seen_at, last_seen_at, is_blocked) VALUES (?, ?, ?, ?, ?, 0) "
             "ON CONFLICT(email) DO UPDATE SET name=excluded.name, picture=excluded.picture, last_seen_at=excluded.last_seen_at",
             (email, name, picture, now, now),
         )
         await db.commit()
+    access_token = _create_access_token(email, name, picture)
     return {
         "status": "ok",
         "user": {"email": email, "name": name, "picture": picture},
@@ -4562,7 +4569,7 @@ async def admin_list_users(
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT email, name, picture, first_seen_at, last_seen_at FROM users ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",
+            "SELECT email, name, picture, first_seen_at, last_seen_at, is_blocked FROM users ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",
             (page_size + 1, offset),
         ) as cur:
             rows = await cur.fetchall()
@@ -4570,22 +4577,33 @@ async def admin_list_users(
             total = (await cur2.fetchone())[0]
     has_more = len(rows) > page_size
     users = [dict(r) for r in rows[:page_size]]
-    # Annotate admins
     for u in users:
         u["is_admin"] = u["email"].lower() in ADMIN_EMAILS
+        u["is_blocked"] = bool(u.get("is_blocked", 0))
     return {"users": users, "total": total, "page": page, "has_more": has_more}
 
 
 @app.delete("/admin/users/{email:path}", dependencies=[Depends(verify_api_key)])
-async def admin_delete_user(email: str, token_payload: dict = Depends(require_admin)):
+async def admin_block_user(email: str, token_payload: dict = Depends(require_admin)):
     email = email.lower().strip()
     requester = _user_email_from_payload(token_payload)
     if email == requester:
-        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+        raise HTTPException(status_code=400, detail="Cannot block your own account")
+    if email in ADMIN_EMAILS:
+        raise HTTPException(status_code=400, detail="Cannot block an admin account")
     async with aiosqlite.connect(DB_PATH) as db:
-        await db.execute("DELETE FROM users WHERE email = ?", (email,))
+        await db.execute("UPDATE users SET is_blocked = 1 WHERE email = ?", (email,))
         await db.commit()
-    return {"status": "ok", "deleted": email}
+    return {"status": "ok", "blocked": email}
+
+
+@app.post("/admin/users/{email:path}/unblock", dependencies=[Depends(verify_api_key)])
+async def admin_unblock_user(email: str, token_payload: dict = Depends(require_admin)):
+    email = email.lower().strip()
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("UPDATE users SET is_blocked = 0 WHERE email = ?", (email,))
+        await db.commit()
+    return {"status": "ok", "unblocked": email}
 
 
 @app.get("/jobs/{job_uid}", dependencies=[Depends(verify_api_key)])

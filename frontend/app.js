@@ -222,26 +222,36 @@ async function resolveGoogleClientId() {
 
 async function handleGoogleCredential(credentialResponse) {
   setAuthStatus('Signing you in...');
-  try {
-    const res = await fetch(CONFIG.API_BASE_URL + '/auth/google', {
-      method: 'POST',
-      headers: AUTH.headers(),
-      body: JSON.stringify({ credential: credentialResponse.credential }),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `Sign-in failed (${res.status})`);
+  const body = JSON.stringify({ credential: credentialResponse.credential });
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      setAuthStatus('Retrying sign-in...');
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
     }
+    try {
+      const res = await fetch(CONFIG.API_BASE_URL + '/auth/google', {
+        method: 'POST',
+        headers: AUTH.headers(),
+        body,
+      });
 
-    const data = await res.json();
-    AUTH.saveSession(data.access_token, data.user || {});
-    showAppAfterAuth(data.user || {});
-    await loadUserData();
-    setAuthStatus('');
-  } catch (err) {
-    setAuthStatus(err.message || 'Google sign-in failed');
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Sign-in failed (${res.status})`);
+      }
+
+      const data = await res.json();
+      AUTH.saveSession(data.access_token, data.user || {});
+      showAppAfterAuth(data.user || {});
+      await loadUserData();
+      setAuthStatus('');
+      return;
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  setAuthStatus(lastErr?.message || 'Google sign-in failed');
 }
 
 async function initGoogleGate() {
@@ -261,17 +271,21 @@ async function initGoogleGate() {
     return;
   }
 
+  let gsiInitialized = false;
   const renderButton = () => {
     if (!window.google || !window.google.accounts || !window.google.accounts.id) {
       setAuthStatus('Loading Google Sign-In...');
       return;
     }
-    window.google.accounts.id.initialize({
-      client_id: clientId,
-      callback: handleGoogleCredential,
-      auto_select: false,
-      cancel_on_tap_outside: false,
-    });
+    if (!gsiInitialized) {
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: handleGoogleCredential,
+        auto_select: false,
+        cancel_on_tap_outside: false,
+      });
+      gsiInitialized = true;
+    }
     const host = document.getElementById('google-signin-btn');
     if (host) {
       host.innerHTML = '';
@@ -3136,10 +3150,17 @@ async function fetchAndRenderAdminAccounts() {
     if (listEl) {
       listEl.innerHTML = users.length === 0 ? '<p style="color:var(--text-muted);padding:1rem">No accounts found.</p>' : users.map(u => {
         const avatar = u.picture ? `<img src="${esc(u.picture)}" alt="" class="admin-account-avatar" referrerpolicy="no-referrer">` : `<div class="admin-account-avatar admin-account-avatar-placeholder">${esc((u.name || u.email || '?')[0].toUpperCase())}</div>`;
-        const badge = u.is_admin ? '<span class="admin-account-badge">Admin</span>' : '';
+        const badge = u.is_admin ? '<span class="admin-account-badge">Admin</span>' : (u.is_blocked ? '<span class="admin-account-badge" style="background:var(--danger,#e53935)">Blocked</span>' : '');
         const lastSeen = u.last_seen_at ? new Date(u.last_seen_at).toLocaleDateString() : '—';
-        const deleteBtn = u.is_admin ? '' : `<button class="browse-action-btn" data-delete-user="${esc(u.email)}" title="Remove account" type="button">Remove</button>`;
-        return `<div class="admin-account-row">${avatar}<div class="admin-account-info"><span class="admin-account-name">${esc(u.name || u.email)}${badge}</span><span class="admin-account-email">${esc(u.email)}</span><span class="admin-account-meta">Last seen ${lastSeen}</span></div><div class="admin-account-actions">${deleteBtn}</div></div>`;
+        let actionBtn = '';
+        if (!u.is_admin) {
+          if (u.is_blocked) {
+            actionBtn = `<button class="browse-action-btn" data-unblock-user="${esc(u.email)}" title="Unblock account" type="button">Unblock</button>`;
+          } else {
+            actionBtn = `<button class="browse-action-btn" data-delete-user="${esc(u.email)}" title="Block account" type="button" style="background:var(--danger,#e53935);border-color:var(--danger,#e53935);color:#fff">Block</button>`;
+          }
+        }
+        return `<div class="admin-account-row">${avatar}<div class="admin-account-info"><span class="admin-account-name">${esc(u.name || u.email)}${badge}</span><span class="admin-account-email">${esc(u.email)}</span><span class="admin-account-meta">Last seen ${lastSeen}</span></div><div class="admin-account-actions">${actionBtn}</div></div>`;
       }).join('');
       listEl.classList.remove('hidden');
     }
@@ -3158,7 +3179,7 @@ async function fetchAndRenderAdminAccounts() {
 }
 
 async function adminDeleteUser(email) {
-  if (!confirm(`Remove account for ${email}? They will be signed out on next request.`)) return;
+  if (!confirm(`Block ${email}? They will be unable to sign in until unblocked.`)) return;
   try {
     const res = await fetch(`${CONFIG.API_BASE_URL}/admin/users/${encodeURIComponent(email)}`, {
       method: 'DELETE',
@@ -3167,17 +3188,35 @@ async function adminDeleteUser(email) {
     if (res.status === 401) { handleAuthFailure('Session expired. Please sign in again.'); return; }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
-    showToast(`Account ${email} removed`);
+    showToast(`${email} has been blocked`);
     fetchAndRenderAdminAccounts();
   } catch (err) {
-    showToast(err.message || 'Could not remove account');
+    showToast(err.message || 'Could not block account');
+  }
+}
+
+async function adminUnblockUser(email) {
+  if (!confirm(`Unblock ${email}? They will be able to sign in again.`)) return;
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/users/${encodeURIComponent(email)}/unblock`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    if (res.status === 401) { handleAuthFailure('Session expired. Please sign in again.'); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
+    showToast(`${email} has been unblocked`);
+    fetchAndRenderAdminAccounts();
+  } catch (err) {
+    showToast(err.message || 'Could not unblock account');
   }
 }
 
 document.getElementById('adminAccountsList')?.addEventListener('click', (e) => {
-  const btn = e.target.closest('[data-delete-user]');
-  if (!btn) return;
-  adminDeleteUser(btn.getAttribute('data-delete-user') || '');
+  const blockBtn = e.target.closest('[data-delete-user]');
+  if (blockBtn) { adminDeleteUser(blockBtn.getAttribute('data-delete-user') || ''); return; }
+  const unblockBtn = e.target.closest('[data-unblock-user]');
+  if (unblockBtn) { adminUnblockUser(unblockBtn.getAttribute('data-unblock-user') || ''); }
 });
 
 document.getElementById('adminAccountsPrevBtn')?.addEventListener('click', () => {
