@@ -148,7 +148,7 @@ ENABLE_LLM_JOB_RANKING = os.getenv("ENABLE_LLM_JOB_RANKING", _DEFAULT_ENABLE_LLM
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
 CSV_PATH          = os.getenv(
     "CSV_PATH",
-    os.path.join(os.path.dirname(__file__), "exports", "adzuna_live_jobs_india.csv")
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "adzuna_india_jobs_10000.csv")
 )
 _default_db_path = (
     "/tmp/jobmatch.db"

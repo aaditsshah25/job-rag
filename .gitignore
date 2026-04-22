@@ -22,7 +22,9 @@ node_modules/
 frontend-react/
 
 # Database
-data/
+data/*.db
+# Keep CSV datasets tracked
+!data/*.csv
 *.db
 
 # Logs
