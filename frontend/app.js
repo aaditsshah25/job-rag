@@ -2744,19 +2744,23 @@ const backFromAdminBtn = document.getElementById('backFromAdminBtn');
 const adminTabActive = document.getElementById('adminTabActive');
 const adminTabBlocked = document.getElementById('adminTabBlocked');
 const adminTabUpload = document.getElementById('adminTabUpload');
+const adminTabAccounts = document.getElementById('adminTabAccounts');
 
 const adminActiveView = document.getElementById('adminActiveView');
 const adminBlockedView = document.getElementById('adminBlockedView');
 const adminUploadView = document.getElementById('adminUploadView');
+const adminAccountsView = document.getElementById('adminAccountsView');
 
 let adminActiveState = { page: 0, q: '', location: '', loading: false };
 let adminBlockedState = { page: 0, loading: false };
+let adminAccountsState = { page: 0, loading: false };
 
 function setAdminTab(tab) {
   const tabs = [
     { key: 'active', btn: adminTabActive, view: adminActiveView },
     { key: 'blocked', btn: adminTabBlocked, view: adminBlockedView },
     { key: 'upload', btn: adminTabUpload, view: adminUploadView },
+    { key: 'accounts', btn: adminTabAccounts, view: adminAccountsView },
   ];
   tabs.forEach((t) => {
     t.btn?.classList.toggle('active', t.key === tab);
@@ -3067,8 +3071,13 @@ async function adminUploadCsv(dryRun) {
         `;
       }
     } else {
-      if (statusEl) statusEl.textContent = `Imported. Inserted ${data.inserted || 0}, updated ${data.updated || 0}.`;
-      showToast('Jobs imported');
+      const indexNote = data.index_error
+        ? ` (index error: ${data.index_error})`
+        : data.indexed_vectors != null
+          ? ` — ${data.indexed_vectors} vectors in Pinecone`
+          : '';
+      if (statusEl) statusEl.textContent = `Imported. Inserted ${data.inserted || 0}, updated ${data.updated || 0}${indexNote}.`;
+      showToast('Jobs imported and indexed');
       fetchAndRenderAdminActiveJobs();
     }
   } catch (err) {
@@ -3098,6 +3107,86 @@ async function adminReindexNow() {
   }
 }
 
+async function fetchAndRenderAdminAccounts() {
+  if (adminAccountsState.loading) return;
+  adminAccountsState.loading = true;
+  const loadingEl = document.getElementById('adminAccountsLoading');
+  const countEl = document.getElementById('adminAccountsCount');
+  const listEl = document.getElementById('adminAccountsList');
+  const paginationEl = document.getElementById('adminAccountsPagination');
+  const prevBtn = document.getElementById('adminAccountsPrevBtn');
+  const nextBtn = document.getElementById('adminAccountsNextBtn');
+  const pageInfoEl = document.getElementById('adminAccountsPageInfo');
+
+  loadingEl?.classList.remove('hidden');
+  countEl?.classList.add('hidden');
+  listEl?.classList.add('hidden');
+  paginationEl?.classList.add('hidden');
+
+  try {
+    const params = new URLSearchParams({ page: adminAccountsState.page, page_size: 50 });
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/users?${params}`, { headers: authHeaders() });
+    if (res.status === 401) { handleAuthFailure('Session expired. Please sign in again.'); return; }
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    const data = await res.json();
+    const users = Array.isArray(data.users) ? data.users : [];
+
+    if (countEl) { countEl.textContent = `${data.total || users.length} account${(data.total || users.length) === 1 ? '' : 's'}`; countEl.classList.remove('hidden'); }
+
+    if (listEl) {
+      listEl.innerHTML = users.length === 0 ? '<p style="color:var(--text-muted);padding:1rem">No accounts found.</p>' : users.map(u => {
+        const avatar = u.picture ? `<img src="${esc(u.picture)}" alt="" class="admin-account-avatar" referrerpolicy="no-referrer">` : `<div class="admin-account-avatar admin-account-avatar-placeholder">${esc((u.name || u.email || '?')[0].toUpperCase())}</div>`;
+        const badge = u.is_admin ? '<span class="admin-account-badge">Admin</span>' : '';
+        const lastSeen = u.last_seen_at ? new Date(u.last_seen_at).toLocaleDateString() : '—';
+        const deleteBtn = u.is_admin ? '' : `<button class="browse-action-btn" data-delete-user="${esc(u.email)}" title="Remove account" type="button">Remove</button>`;
+        return `<div class="admin-account-row">${avatar}<div class="admin-account-info"><span class="admin-account-name">${esc(u.name || u.email)}${badge}</span><span class="admin-account-email">${esc(u.email)}</span><span class="admin-account-meta">Last seen ${lastSeen}</span></div><div class="admin-account-actions">${deleteBtn}</div></div>`;
+      }).join('');
+      listEl.classList.remove('hidden');
+    }
+
+    const hasMore = data.has_more;
+    if (prevBtn) prevBtn.disabled = adminAccountsState.page === 0;
+    if (nextBtn) nextBtn.disabled = !hasMore;
+    if (pageInfoEl) pageInfoEl.textContent = `Page ${adminAccountsState.page + 1}`;
+    if (data.total > 50) paginationEl?.classList.remove('hidden');
+  } catch (err) {
+    if (listEl) { listEl.innerHTML = `<p style="color:var(--danger)">${esc(err.message)}</p>`; listEl.classList.remove('hidden'); }
+  } finally {
+    loadingEl?.classList.add('hidden');
+    adminAccountsState.loading = false;
+  }
+}
+
+async function adminDeleteUser(email) {
+  if (!confirm(`Remove account for ${email}? They will be signed out on next request.`)) return;
+  try {
+    const res = await fetch(`${CONFIG.API_BASE_URL}/admin/users/${encodeURIComponent(email)}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (res.status === 401) { handleAuthFailure('Session expired. Please sign in again.'); return; }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Server error ${res.status}`);
+    showToast(`Account ${email} removed`);
+    fetchAndRenderAdminAccounts();
+  } catch (err) {
+    showToast(err.message || 'Could not remove account');
+  }
+}
+
+document.getElementById('adminAccountsList')?.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-delete-user]');
+  if (!btn) return;
+  adminDeleteUser(btn.getAttribute('data-delete-user') || '');
+});
+
+document.getElementById('adminAccountsPrevBtn')?.addEventListener('click', () => {
+  if (adminAccountsState.page > 0) { adminAccountsState.page--; fetchAndRenderAdminAccounts(); }
+});
+document.getElementById('adminAccountsNextBtn')?.addEventListener('click', () => {
+  adminAccountsState.page++; fetchAndRenderAdminAccounts();
+});
+
 adminPanelBtn?.addEventListener('click', async () => {
   openAdminView();
   await fetchAndRenderAdminActiveJobs();
@@ -3115,6 +3204,10 @@ adminTabBlocked?.addEventListener('click', async () => {
 });
 adminTabUpload?.addEventListener('click', () => {
   setAdminTab('upload');
+});
+adminTabAccounts?.addEventListener('click', async () => {
+  setAdminTab('accounts');
+  await fetchAndRenderAdminAccounts();
 });
 
 document.getElementById('adminActiveSearchBtn')?.addEventListener('click', () => {

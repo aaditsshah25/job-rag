@@ -4620,6 +4620,86 @@ body::after {
   color: var(--text-secondary);
 }
 
+/* ── Admin Accounts ── */
+.admin-accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.admin-account-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 14px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow-xs);
+}
+
+.admin-account-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.admin-account-avatar-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-light);
+  color: var(--accent-text);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.admin-account-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.admin-account-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-account-email {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.admin-account-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.admin-account-badge {
+  display: inline-block;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.admin-account-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
 /* ── Responsive ── */
 @media (max-width: 767px) {
   .browse-shell {

@@ -443,6 +443,7 @@
           <button id="adminTabActive" class="admin-tab active" type="button">Active Jobs</button>
           <button id="adminTabBlocked" class="admin-tab" type="button">Blocked Jobs</button>
           <button id="adminTabUpload" class="admin-tab" type="button">Upload CSV</button>
+          <button id="adminTabAccounts" class="admin-tab" type="button">Accounts</button>
         </div>
 
         <!-- Active Jobs -->
@@ -508,12 +509,27 @@
             <input id="adminUploadFile" type="file" accept=".csv,text/csv" />
             <div class="admin-upload-actions">
               <button id="adminUploadDryRunBtn" class="btn-secondary" type="button">Preview</button>
-              <button id="adminUploadImportBtn" class="btn-primary" type="button">Import</button>
-              <button id="adminReindexBtn" class="btn-secondary" type="button">Reindex</button>
+              <button id="adminUploadImportBtn" class="btn-primary" type="button">Import &amp; Index</button>
+              <button id="adminReindexBtn" class="btn-secondary" type="button">Reindex Only</button>
             </div>
 
             <div id="adminUploadStatus" class="admin-upload-status"></div>
             <div id="adminUploadPreview" class="admin-upload-preview"></div>
+          </div>
+        </div>
+
+        <!-- Accounts -->
+        <div id="adminAccountsView" class="hidden">
+          <div id="adminAccountsLoading" class="state-card hidden">
+            <div class="loader"><div class="loader-ring"></div></div>
+            <h3>Loading accounts…</h3>
+          </div>
+          <div id="adminAccountsCount" class="browse-results-count hidden"></div>
+          <div id="adminAccountsList" class="admin-accounts-list hidden"></div>
+          <div id="adminAccountsPagination" class="browse-pagination hidden">
+            <button id="adminAccountsPrevBtn" class="btn-secondary" type="button" disabled>← Prev</button>
+            <span id="adminAccountsPageInfo" class="browse-page-info"></span>
+            <button id="adminAccountsNextBtn" class="btn-secondary" type="button">Next →</button>
           </div>
         </div>
       </div>

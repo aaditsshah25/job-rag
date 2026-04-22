@@ -647,6 +647,17 @@ async def init_db():
         """)
 
         await db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                name TEXT,
+                picture TEXT,
+                first_seen_at TEXT,
+                last_seen_at TEXT
+            )
+        """)
+
+        await db.execute("""
             CREATE TABLE IF NOT EXISTS admin_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_key TEXT UNIQUE,
@@ -2868,6 +2879,14 @@ async def auth_google(req: GoogleAuthRequest):
     name = _safe_str(token_payload.get("name", "")) or email.split("@")[0]
     picture = _safe_str(token_payload.get("picture", ""))
     access_token = _create_access_token(email, name, picture)
+    now = datetime.utcnow().isoformat() + "Z"
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO users (email, name, picture, first_seen_at, last_seen_at) VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(email) DO UPDATE SET name=excluded.name, picture=excluded.picture, last_seen_at=excluded.last_seen_at",
+            (email, name, picture, now, now),
+        )
+        await db.commit()
     return {
         "status": "ok",
         "user": {"email": email, "name": name, "picture": picture},
@@ -4355,7 +4374,61 @@ async def admin_upload_jobs(
 
     _browse_cache["fetched_at"] = 0.0
     _search_cache.clear()
-    return {"status": "ok", "inserted": inserted, "updated": updated, "rows_total": rows_total}
+
+    # Auto-reindex into Pinecone after successful import
+    indexed_vectors = 0
+    index_error = None
+    if PINECONE_API_KEY:
+        try:
+            indexed_vectors = await asyncio.to_thread(index_dataset, True)
+        except Exception as exc:
+            index_error = str(exc)
+            log.warning("Post-upload reindex failed: %s", exc)
+
+    return {
+        "status": "ok",
+        "inserted": inserted,
+        "updated": updated,
+        "rows_total": rows_total,
+        "indexed_vectors": indexed_vectors,
+        "index_error": index_error,
+    }
+
+
+@app.get("/admin/users", dependencies=[Depends(verify_api_key)])
+async def admin_list_users(
+    token_payload: dict = Depends(require_admin),
+    page: int = 0,
+    page_size: int = 50,
+):
+    offset = page * page_size
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT email, name, picture, first_seen_at, last_seen_at FROM users ORDER BY last_seen_at DESC LIMIT ? OFFSET ?",
+            (page_size + 1, offset),
+        ) as cur:
+            rows = await cur.fetchall()
+        async with db.execute("SELECT COUNT(*) FROM users") as cur2:
+            total = (await cur2.fetchone())[0]
+    has_more = len(rows) > page_size
+    users = [dict(r) for r in rows[:page_size]]
+    # Annotate admins
+    for u in users:
+        u["is_admin"] = u["email"].lower() in ADMIN_EMAILS
+    return {"users": users, "total": total, "page": page, "has_more": has_more}
+
+
+@app.delete("/admin/users/{email:path}", dependencies=[Depends(verify_api_key)])
+async def admin_delete_user(email: str, token_payload: dict = Depends(require_admin)):
+    email = email.lower().strip()
+    requester = _user_email_from_payload(token_payload)
+    if email == requester:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM users WHERE email = ?", (email,))
+        await db.commit()
+    return {"status": "ok", "deleted": email}
 
 
 @app.get("/jobs/{job_uid}", dependencies=[Depends(verify_api_key)])
