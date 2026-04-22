@@ -15,9 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend and frontend
 COPY backend.py source_ingestion.py ./
 COPY frontend/ ./frontend/
-
-# Create data directory
-RUN mkdir -p /app/data
+COPY data/ ./data/
 
 EXPOSE 8000
 
