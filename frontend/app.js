@@ -597,39 +597,6 @@ async function checkEmailServiceStatus() {
   }
 }
 
-// ─── DARK MODE TOGGLE ────────────────────────────────
-const darkModeToggle = document.getElementById('darkModeToggle');
-const THEME_STORAGE_KEY = 'jobmatch_dark';
-const systemDarkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
-
-function applyTheme(theme) {
-  const nextTheme = theme === 'dark' ? 'dark' : 'light';
-  document.documentElement.setAttribute('data-theme', nextTheme);
-  if (darkModeToggle) {
-    darkModeToggle.setAttribute('aria-pressed', nextTheme === 'dark' ? 'true' : 'false');
-    darkModeToggle.title = nextTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
-  }
-}
-
-const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-if (savedTheme === '1') applyTheme('dark');
-else if (savedTheme === '0') applyTheme('light');
-else applyTheme(systemDarkQuery?.matches ? 'dark' : 'light');
-
-if (systemDarkQuery && savedTheme === null) {
-  const onSystemThemeChange = (event) => applyTheme(event.matches ? 'dark' : 'light');
-  if (typeof systemDarkQuery.addEventListener === 'function') {
-    systemDarkQuery.addEventListener('change', onSystemThemeChange);
-  } else if (typeof systemDarkQuery.addListener === 'function') {
-    systemDarkQuery.addListener(onSystemThemeChange);
-  }
-}
-
-darkModeToggle?.addEventListener('click', () => {
-  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-  applyTheme(isDark ? 'light' : 'dark');
-  localStorage.setItem(THEME_STORAGE_KEY, isDark ? '0' : '1');
-});
 
 // ─── INITIALIZE DATALISTS ───────────────────────────
 // Populate job titles datalist
