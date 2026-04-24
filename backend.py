@@ -2467,13 +2467,13 @@ def _resume_quality_report(text: str) -> dict:
         score -= 6
         penalties.append("extremely short text")
     elif len(words) < 45:
-        score -= 2
+        score -= 1
         penalties.append("short text")
     if words and repeated_ratio < 0.16:
         score -= 4
         penalties.append("highly repeated text")
     elif words and repeated_ratio < 0.24:
-        score -= 2
+        score -= 1
         penalties.append("some repeated text")
     if not matched_sections and not (education or experience or projects or certification or skill_hits or role_hits):
         score -= 3
@@ -2499,8 +2499,8 @@ def _resume_quality_report(text: str) -> dict:
         score -= 3
         penalties.append("prompt-injection-like text")
 
-    accept_threshold = 9
-    uncertain_threshold = 5
+    accept_threshold = 8
+    uncertain_threshold = 4
     enough_content = len(content_categories) >= 2
     enough_text = len(words) >= 18 and repeated_ratio >= 0.16
     obvious_non_resume = len(unrelated_hits) >= 2 or (len(unrelated_hits) == 1 and not enough_content)
