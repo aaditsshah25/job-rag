@@ -453,7 +453,6 @@ const form = document.getElementById('profile-form');
 const submitBtn = document.getElementById('submitBtn');
 const clearBtn = document.getElementById('clearBtn');
 const emailResultsBtn = document.getElementById('emailResultsBtn');
-const debugRetrievalBtn = document.getElementById('debugRetrievalBtn');
 
 const emptyState = document.getElementById('empty-state');
 const loadingState = document.getElementById('loading-state');
@@ -842,7 +841,6 @@ form.addEventListener('submit', async (e) => {
   showState('loading');
   submitBtn.disabled = true;
   if (emailResultsBtn) emailResultsBtn.style.display = 'none';
-  if (debugRetrievalBtn) debugRetrievalBtn.style.display = 'none';
 
   try {
     const response = await sendToBackend(profile);
@@ -860,7 +858,6 @@ clearBtn.addEventListener('click', () => {
   showState('empty');
   resultsContent.innerHTML = '';
   if (emailResultsBtn) emailResultsBtn.style.display = 'none';
-  if (debugRetrievalBtn) debugRetrievalBtn.style.display = 'none';
 });
 
 
@@ -1293,10 +1290,6 @@ sendCoverLetterBtn?.addEventListener('click', async () => {
   }
 });
 
-const retrievalDebugModal = document.getElementById('retrievalDebugModal');
-const retrievalDebugContent = document.getElementById('retrievalDebugContent');
-const closeRetrievalDebug = document.getElementById('closeRetrievalDebug');
-const closeRetrievalDebugBtn = document.getElementById('closeRetrievalDebugBtn');
 const applicationStatusModal = document.getElementById('applicationStatusModal');
 const applicationStatusJob = document.getElementById('applicationStatusJob');
 const applicationStatusSelect = document.getElementById('applicationStatusSelect');
@@ -1305,16 +1298,6 @@ const closeApplicationStatus = document.getElementById('closeApplicationStatus')
 const cancelApplicationStatusBtn = document.getElementById('cancelApplicationStatusBtn');
 const saveApplicationStatusBtn = document.getElementById('saveApplicationStatusBtn');
 let pendingApplicationContext = null;
-
-function closeRetrievalDebugModal() {
-  retrievalDebugModal?.classList.add('hidden');
-}
-
-closeRetrievalDebug?.addEventListener('click', closeRetrievalDebugModal);
-closeRetrievalDebugBtn?.addEventListener('click', closeRetrievalDebugModal);
-retrievalDebugModal?.addEventListener('click', (e) => {
-  if (e.target === retrievalDebugModal) closeRetrievalDebugModal();
-});
 
 function closeApplicationStatusModal() {
   applicationStatusModal?.classList.add('hidden');
@@ -1359,44 +1342,6 @@ saveApplicationStatusBtn?.addEventListener('click', async () => {
     saveApplicationStatusBtn.textContent = oldText;
   }
 });
-
-async function openRetrievalDebug() {
-  const profile = getCurrentProfileFromForm();
-  if (!profile.desiredRole && profile.skills.length === 0 && !profile.additional) {
-    alert('Fill at least role/skills/preferences before running retrieval debug.');
-    return;
-  }
-  retrievalDebugContent.textContent = 'Loading retrieval debug...';
-  retrievalDebugModal?.classList.remove('hidden');
-  const headers = AUTH.headers();
-  try {
-    const res = await fetch(CONFIG.API_BASE_URL + '/debug/retrieval', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ profile, topK: 12 }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || `Debug retrieval failed (${res.status})`);
-    }
-    const data = await res.json();
-    const lines = [];
-    lines.push(`Query: ${data.query}`);
-    lines.push(`Top K: ${data.top_k} | Returned: ${data.count}`);
-    lines.push('');
-    (data.candidates || []).forEach((c, i) => {
-      lines.push(`${i + 1}. ${c.title || 'Untitled'} @ ${c.company || 'Unknown'}`);
-      lines.push(`   score=${c.score} | semantic=${c.semantic_score} | lexical=${c.lexical_score}`);
-      lines.push(`   ${c.location || ''}${c.country ? ', ' + c.country : ''} | ${c.work_type || 'n/a'} | ${c.salary || 'n/a'}`);
-      if (c.skills && c.skills.length) lines.push(`   skills: ${c.skills.join(', ')}`);
-      if (c.source || c.external_url) lines.push(`   source: ${c.source || 'n/a'} ${c.external_url || ''}`);
-      lines.push('');
-    });
-    retrievalDebugContent.textContent = lines.join('\n').trim();
-  } catch (err) {
-    retrievalDebugContent.textContent = 'Error: ' + (err.message || String(err));
-  }
-}
 
 function appKey(jobTitle, company) {
   return `${normalizeJobField(jobTitle)}|${normalizeJobField(company)}`;
@@ -1474,9 +1419,6 @@ async function saveApplicationStatus(jobTitle, company, status, notes) {
   updateApplicationsBadge();
 }
 
-debugRetrievalBtn?.addEventListener('click', () => {
-  openRetrievalDebug();
-});
 
 async function generateCoverLetter(jobTitle, company, jobDescription, recruiterEmail = '') {
   const profile = getCurrentProfileFromForm();
@@ -1559,7 +1501,6 @@ async function displayResults(markdown) {
   }
   showState('results');
   if (emailResultsBtn) emailResultsBtn.style.display = '';
-  if (debugRetrievalBtn) debugRetrievalBtn.style.display = '';
   applyApplicationStatusesToUI();
 }
 
