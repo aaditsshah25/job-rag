@@ -947,6 +947,9 @@ class UserProfile(BaseModel):
     workAuth: str = "Not Specified"
     additional: str = ""
     resumeText: str = ""  # full raw CV text for richer matching
+    certifications: list[str] = []
+    seniority: str = ""  # e.g. "junior", "mid", "senior", "lead"
+    jobTitlesHeld: list[str] = []  # past job titles from resume
 
 class WebhookRequest(BaseModel):
     chatInput: Optional[str] = None
@@ -1112,6 +1115,16 @@ def build_query_from_profile(profile: UserProfile) -> str:
         cleaned_additional = _clean_untrusted_text(profile.additional, 240)
         if cleaned_additional:
             parts.append(f"Additional Preferences: {cleaned_additional}")
+    if profile.certifications:
+        certs = _unique_preserve_order([_clean_untrusted_text(c, 80) for c in profile.certifications], 8)
+        if certs:
+            parts.append(f"Certifications: {', '.join(certs)}")
+    if profile.seniority:
+        parts.append(f"Seniority Level: {_clean_untrusted_text(profile.seniority, 40)}")
+    if profile.jobTitlesHeld:
+        titles = _unique_preserve_order([_clean_untrusted_text(t, 80) for t in profile.jobTitlesHeld], 5)
+        if titles:
+            parts.append(f"Previous Roles: {', '.join(titles)}")
     # Append CV excerpt for richer semantic embedding
     if profile.resumeText:
         cv_excerpt = _clean_untrusted_text(profile.resumeText, 800)
@@ -3099,6 +3112,21 @@ def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") ->
     if not profile or not candidates:
         return candidates
 
+    # Hard filter: remove jobs where user doesn't meet experience requirement
+    if profile.experience is not None:
+        def _meets_experience(c: dict) -> bool:
+            exp_req = _safe_str(c.get("experience", ""))
+            if not exp_req:
+                return True  # no requirement stated — always include
+            exp_nums = re.findall(r"\d+", exp_req)
+            if not exp_nums:
+                return True  # can't parse — include by default
+            min_req = int(exp_nums[0])
+            return profile.experience >= min_req
+        candidates = [c for c in candidates if _meets_experience(c)]
+        if not candidates:
+            return candidates
+
     # Build a set of normalised profile tokens to match against
     profile_tokens: set[str] = set()
     for skill in (profile.skills or []):
@@ -3107,11 +3135,33 @@ def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") ->
         w = word.lower().strip()
         if len(w) > 2:
             profile_tokens.add(w)
+    # Add past job title tokens
+    for title in (profile.jobTitlesHeld or []):
+        for word in re.split(r"[\s,|/]+", title.lower()):
+            w = word.strip()
+            if len(w) > 2:
+                profile_tokens.add(w)
     # Add significant words from CV text
     if profile.resumeText:
         for word in re.split(r"\W+", profile.resumeText[:2000].lower()):
             if len(word) > 3:
                 profile_tokens.add(word)
+
+    # Pre-compute profile location tokens for location matching
+    profile_location_tokens: set[str] = set()
+    if profile.location:
+        for word in re.split(r"[\s,]+", profile.location.lower()):
+            w = word.strip()
+            if len(w) > 2:
+                profile_location_tokens.add(w)
+
+    # Pre-compute certification tokens for cert overlap matching
+    profile_cert_tokens: set[str] = set()
+    for cert in (profile.certifications or []):
+        for word in re.split(r"[\s,]+", cert.lower()):
+            w = word.strip()
+            if len(w) > 2:
+                profile_cert_tokens.add(w)
 
     def _boost(c: dict) -> float:
         base = float(c.get("score") or 0)
@@ -3121,12 +3171,14 @@ def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") ->
         job_text = " ".join([
             c.get("title", ""), c.get("role", ""), c.get("description", ""),
             c.get("sector", ""), c.get("industry", ""),
+            c.get("qualifications", ""), c.get("responsibilities", ""),
             " ".join(c.get("skills", [])),
         ]).lower()
         job_tokens = set(re.split(r"\W+", job_text))
         overlap = len(profile_tokens & job_tokens)
         # Small additive boost (max ~0.15) so cosine score still dominates
         boost = min(overlap * 0.005, 0.15)
+
         # Experience alignment boost
         if profile.experience:
             exp_req = _safe_str(c.get("experience", ""))
@@ -3138,6 +3190,53 @@ def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") ->
                     boost += 0.05
                 elif diff <= 3:
                     boost += 0.02
+
+        # Location match boost
+        if profile_location_tokens:
+            job_location = (c.get("location", "") + " " + c.get("country", "")).lower()
+            job_location_tokens = set(re.split(r"[\s,]+", job_location))
+            if profile_location_tokens & job_location_tokens:
+                boost += 0.06
+            # Remote jobs are relevant regardless of location
+            elif re.search(r"\bremote\b", c.get("work_type", "").lower()):
+                boost += 0.02
+
+        # Work type match boost
+        if profile.workType and profile.workType != "Any":
+            job_work_type = c.get("work_type", "").lower()
+            if profile.workType.lower() in job_work_type:
+                boost += 0.04
+
+        # Industry alignment boost
+        if profile.industry:
+            job_industry = (c.get("industry", "") + " " + c.get("sector", "")).lower()
+            profile_industry_tokens = set(re.split(r"[\s,|/]+", profile.industry.lower()))
+            job_industry_tokens = set(re.split(r"\W+", job_industry))
+            if profile_industry_tokens & job_industry_tokens:
+                boost += 0.04
+
+        # Certification overlap boost
+        if profile_cert_tokens:
+            job_quals = (c.get("qualifications", "") + " " + c.get("description", "")).lower()
+            job_cert_tokens = set(re.split(r"\W+", job_quals))
+            cert_overlap = len(profile_cert_tokens & job_cert_tokens)
+            boost += min(cert_overlap * 0.01, 0.04)
+
+        # Seniority alignment boost
+        if profile.seniority:
+            job_title_lower = c.get("title", "").lower()
+            seniority_lower = profile.seniority.lower()
+            seniority_map = {
+                "junior": ["junior", "entry", "associate", "graduate", "trainee"],
+                "mid": ["mid", "intermediate", "analyst", "engineer"],
+                "senior": ["senior", "sr.", "sr ", "lead", "principal"],
+                "lead": ["lead", "principal", "staff", "architect"],
+                "manager": ["manager", "head", "director", "vp"],
+            }
+            job_seniority_words = seniority_map.get(seniority_lower, [])
+            if any(w in job_title_lower for w in job_seniority_words):
+                boost += 0.04
+
         return base + boost
 
     reranked = sorted(candidates, key=_boost, reverse=True)
@@ -3638,8 +3737,19 @@ async def parse_resume(file: UploadFile = File(...)):
   "experience_years": 0,
   "education": "highest degree or empty string",
   "recent_role": "most recent job title or empty string",
-  "industries": ["industry1"]
+  "industries": ["industry1"],
+  "certifications": ["cert1"],
+  "location": "city or country the candidate is based in, or empty string",
+  "seniority": "one of: junior, mid, senior, lead, manager, or empty string",
+  "job_titles_held": ["past job title 1", "past job title 2"]
 }}
+
+Rules:
+- skills: technical tools, languages, frameworks, soft skills — be comprehensive
+- certifications: any named certifications, courses, or credentials (e.g. AWS Certified, CFA, PMP)
+- job_titles_held: all distinct job titles from work experience section
+- seniority: infer from years of experience and most recent role level
+- location: candidate's home city/country, not job locations
 
 Resume text:
 <<<RESUME_TEXT>>>
@@ -3649,7 +3759,7 @@ Resume text:
     try:
         raw = await gemini_generate_async(
             prompt,
-            {"temperature": 0, "maxOutputTokens": 500},
+            {"temperature": 0, "maxOutputTokens": 800},
         )
     except Exception as exc:
         log.exception("parse_resume LLM call failed")
@@ -3663,6 +3773,10 @@ Resume text:
         parsed["skills"] = _parse_skills(_safe_str(parsed.get("skills", "")))
     if not isinstance(parsed.get("industries"), list):
         parsed["industries"] = _parse_skills(_safe_str(parsed.get("industries", "")))
+    if not isinstance(parsed.get("certifications"), list):
+        parsed["certifications"] = _parse_skills(_safe_str(parsed.get("certifications", "")))
+    if not isinstance(parsed.get("job_titles_held"), list):
+        parsed["job_titles_held"] = _parse_skills(_safe_str(parsed.get("job_titles_held", "")))
 
     if not parsed.get("experience_years") and parsed.get("experience"):
         try:
