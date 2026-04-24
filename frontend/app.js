@@ -526,71 +526,6 @@ function looksLikeEmail(value) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || '').trim());
 }
 
-function readListTexts(selector, root = document) {
-  return Array.from(root.querySelectorAll(selector))
-    .map((el) => (el.textContent || '').trim())
-    .filter(Boolean);
-}
-
-function buildResultsEmailMarkdown() {
-  const timestamp = new Date().toLocaleString();
-  const lines = [];
-  const nameVal = document.getElementById('fullName')?.value?.trim();
-  const roleVal = document.getElementById('desiredRole')?.value?.trim();
-
-  lines.push('# JobMatch AI Results');
-  lines.push(`Generated: ${timestamp}`);
-  if (nameVal) lines.push(`Candidate: ${nameVal}`);
-  if (roleVal) lines.push(`Target Role: ${roleVal}`);
-  lines.push('');
-
-  const cards = Array.from(document.querySelectorAll('.job-card'));
-  if (cards.length > 0) {
-    lines.push('## Top Matches');
-    lines.push('');
-    cards.forEach((card, idx) => {
-      const title = card.querySelector('.job-title')?.textContent?.trim() || 'Unknown role';
-      const company = card.querySelector('.job-company')?.textContent?.trim() || '';
-      const score = card.querySelector('.score-num')?.textContent?.trim() || '';
-      const meta = readListTexts('.job-meta .meta-chip', card);
-      const reasons = readListTexts('.reasons-section .job-list li', card);
-      const gaps = readListTexts('.gaps-section .job-list li', card);
-      const actions = readListTexts('.actions-section .action-list li', card);
-
-      lines.push(`### ${idx + 1}. ${title}${company ? ` @ ${company}` : ''}`);
-      if (score) lines.push(`- Match Score: ${score}/10`);
-      if (meta[0]) lines.push(`- Location: ${meta[0]}`);
-      if (meta[1]) lines.push(`- Salary: ${meta[1]}`);
-      if (reasons.length) {
-        lines.push('');
-        lines.push('**Why it matches**');
-        reasons.forEach((item) => lines.push(`- ${item}`));
-      }
-      if (gaps.length) {
-        lines.push('');
-        lines.push('**Gaps**');
-        gaps.forEach((item) => lines.push(`- ${item}`));
-      }
-      if (actions.length) {
-        lines.push('');
-        lines.push('**Recommended next steps**');
-        actions.forEach((item, actionIdx) => lines.push(`${actionIdx + 1}. ${item}`));
-      }
-      lines.push('');
-    });
-  }
-
-  const globalActions = readListTexts('.global-actions-card .global-action-step .step-text');
-  if (globalActions.length) {
-    lines.push('## Overall Recommended Next Steps');
-    globalActions.forEach((item, idx) => lines.push(`${idx + 1}. ${item}`));
-    lines.push('');
-  }
-
-  const rendered = lines.join('\n').trim();
-  return rendered || (resultsContent.innerText || resultsContent.textContent || '').trim();
-}
-
 function updateCoverLetterSendButtonState() {
   const sendBtn = document.getElementById('sendCoverLetterBtn');
   if (!sendBtn) return;
@@ -947,54 +882,6 @@ clearBtn.addEventListener('click', () => {
   if (debugRetrievalBtn) debugRetrievalBtn.style.display = 'none';
 });
 
-
-// ─── EMAIL MY RESULTS ────────────────────────────────
-if (emailResultsBtn) {
-  emailResultsBtn.addEventListener('click', async () => {
-    const emailVal = document.getElementById('email').value.trim();
-    const nameVal = document.getElementById('fullName').value.trim();
-    if (emailServiceReady === false) {
-      alert(`Email service is not ready. Missing: ${emailServiceIssue || 'configuration'}`);
-      return;
-    }
-    if (!emailVal) {
-      alert('Please enter your email address in the form before sending results.');
-      return;
-    }
-    if (!looksLikeEmail(emailVal)) {
-      alert('Please enter a valid email address.');
-      return;
-    }
-    const resultsMarkdown = buildResultsEmailMarkdown();
-    if (!resultsMarkdown.trim()) {
-      alert('No results available to send yet.');
-      return;
-    }
-    const headers = AUTH.headers();
-    try {
-      emailResultsBtn.disabled = true;
-      emailResultsBtn.textContent = 'Sending...';
-      const res = await fetch(CONFIG.API_BASE_URL + '/send-results', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ email: emailVal, name: nameVal || 'there', results_markdown: resultsMarkdown }),
-      });
-      if (res.ok) {
-        emailResultsBtn.textContent = 'Sent!';
-        setTimeout(() => { emailResultsBtn.textContent = 'Email My Results'; emailResultsBtn.disabled = false; }, 3000);
-      } else {
-        const d = await res.json().catch(() => ({}));
-        alert('Failed to send email: ' + (d.detail || res.status));
-        emailResultsBtn.textContent = 'Email My Results';
-        emailResultsBtn.disabled = false;
-      }
-    } catch (err) {
-      alert('Could not reach email service: ' + err.message);
-      emailResultsBtn.textContent = 'Email My Results';
-      emailResultsBtn.disabled = false;
-    }
-  });
-}
 
 checkEmailServiceStatus();
 
