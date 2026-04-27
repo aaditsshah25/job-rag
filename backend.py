@@ -137,7 +137,7 @@ if CHAT_MODEL != _configured_chat_model:
         CHAT_MODEL,
     )
 TOP_K             = int(os.getenv("TOP_K", "20"))
-TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
+TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "10"))
 _DEFAULT_ENABLE_LLM_JOB_RANKING = "1" if GOOGLE_API_KEY else "0"
 ENABLE_LLM_JOB_RANKING = os.getenv("ENABLE_LLM_JOB_RANKING", _DEFAULT_ENABLE_LLM_JOB_RANKING).strip().lower() in {"1", "true", "yes", "on"}
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
