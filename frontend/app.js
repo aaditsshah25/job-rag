@@ -1534,7 +1534,7 @@ function renderJobResults(text) {
     if (t.includes('your job match') || t.includes('job recommendation')) continue;
     if (t.includes('summary')) html += renderSummaryCard(section);
     else if (t.includes('match') || t.includes('recommendation')) html += renderMatchesSection(section);
-    else if (t.includes('action') || t.includes('step') || t.includes('next')) html += renderActionsCard(section);
+    else if (t.includes('action') || t.includes('step') || t.includes('next') || t.includes('overall') || t.includes('note')) continue;
     else if (section.title) html += `<div class="result-section"><h2 class="section-heading">${esc(section.title)}</h2>${renderBasicContent(section.content)}</div>`;
     else if (section.content.trim()) {
       // Skip untitled sections that just contain a top-level heading

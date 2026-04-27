@@ -3017,11 +3017,6 @@ OUTPUT FORMAT — copy this structure EXACTLY:
 ### <next job title> @ <company>
 (repeat the exact block above for all {top_n} jobs)
 
-## Overall Recommended Next Steps
-1. <Broad career advice>
-2. <Skill to develop>
-3. <Networking tip>
-
 STRICT RULES:
 - Use ONLY the job data provided in CANDIDATE JOB POSTINGS — do NOT invent, hallucinate, or fabricate any job details
 - "Jobs Analyzed" MUST equal the exact number shown in "CANDIDATE JOB POSTINGS (N retrieved...)" — never write 0
