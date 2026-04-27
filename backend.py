@@ -3023,7 +3023,10 @@ OUTPUT FORMAT — copy this structure EXACTLY:
 3. <Networking tip>
 
 STRICT RULES:
-- Use ONLY the job data provided — do NOT invent details
+- Use ONLY the job data provided in CANDIDATE JOB POSTINGS — do NOT invent, hallucinate, or fabricate any job details
+- "Jobs Analyzed" MUST equal the exact number shown in "CANDIDATE JOB POSTINGS (N retrieved...)" — never write 0
+- Copy the Job Description verbatim from the provided data — do NOT write generic descriptions
+- Copy the Location exactly from the provided candidate data — do NOT guess or change it
 - Be specific: mention actual skill names, job titles, and requirements from the data
 - Do NOT use emojis
 - Do NOT wrap output in markdown code fences
@@ -3446,6 +3449,9 @@ async def webhook(request: Request):
     profile_for_rerank = req.profile if req.profile else None
     candidates = _rerank_candidates(candidates, profile_for_rerank)
     log.info("[%s] Reranked %d candidates; top: %s", request_id, len(candidates), candidates[0].get("title", "") if candidates else "none")
+
+    if not candidates:
+        return WebhookResponse(output="No matching jobs found for your specified constraints (location/work type). Try broadening your search.")
 
     try:
         # Run blocking Gemma call in a thread so the async event loop stays healthy
