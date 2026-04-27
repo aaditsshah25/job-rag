@@ -2956,8 +2956,8 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
                 continue
             out.append(job)
 
-        # Apply location post-filter: keep jobs whose location/country contains any requested token,
-        # or remote jobs which are always relevant. Fall back to unfiltered if too few results.
+        # Apply location hard filter: only return jobs whose location/country contains a requested
+        # token, or remote jobs. Never fall back to unfiltered — caller will surface "no results".
         if location_tokens:
             def _location_matches(job: dict) -> bool:
                 job_loc = (job.get("location", "") + " " + job.get("country", "")).lower()
@@ -2966,12 +2966,8 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
                 return bool(location_tokens & set(re.split(r"[\s,]+", job_loc)))
 
             location_filtered = [j for j in out if _location_matches(j)]
-            if len(location_filtered) >= max(1, top_k // 2):
-                log.info("Location filter '%s' retained %d/%d candidates", profile_location, len(location_filtered), len(out))
-                out = location_filtered[:top_k]
-            else:
-                log.info("Location filter '%s' yielded only %d results (need %d); using unfiltered results", profile_location, len(location_filtered), top_k)
-                out = out[:top_k]
+            log.info("Location hard filter '%s' retained %d/%d candidates", profile_location, len(location_filtered), len(out))
+            out = location_filtered[:top_k]
 
         return _stable_sort_candidates(out)
     except Exception as exc:
