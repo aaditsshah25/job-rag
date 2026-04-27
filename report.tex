@@ -134,7 +134,7 @@ The objectives, framed around what the course taught, were:
 %% ─────────────────────────────────────────────────────────────────────────────
 \section{System Overview}
 
-JobMatch AI is a browser-based application backed by a Python FastAPI server. The frontend is a static HTML/CSS/JavaScript interface with Google SSO authentication. The backend hosts the RAG pipeline, calls the Gemma API for all generative tasks, reads and writes user state to SQLite, and queries Pinecone for vector retrieval. External job data is ingested from a local Adzuna India dataset (4,000 records) and optionally from live job board APIs.
+JobMatch AI is a browser-based application backed by a Python FastAPI server. The frontend is a static HTML/CSS/JavaScript interface with Google SSO authentication. The backend hosts the RAG pipeline, calls the Gemma API for all generative tasks, reads and writes user state to SQLite, and queries Pinecone for vector retrieval. External job data is ingested from a local Adzuna India dataset (4,000 records) and optionally from live job board APIs. Gemma 4 was used as the primary model, with Gemma 3 used as a fallback when rate limits were hit; evaluation was conducted under this mixed deployment setting.
 
 \subsection{Project Access}
 
@@ -145,13 +145,13 @@ JobMatch AI is a browser-based application backed by a Python FastAPI server. Th
 
 \begin{table}[H]
 \centering\small
-\begin{tabularx}{\linewidth}{p{0.20\linewidth}p{0.18\linewidth}X}
+\begin{tabularx}{\linewidth}{p{0.19\linewidth}p{0.23\linewidth}X}
 \toprule
 \textbf{Component} & \textbf{Technology} & \textbf{Role} \\
 \midrule
-LLM               & Gemma-3/4 (Google)   & All generative tasks: matching, cover letters, tailoring, email drafting. \\
+LLM               & Gemma 4 (primary), Gemma 3 (fallback)   & All generative tasks: matching, cover letters, tailoring, email drafting. \\
 Vector store      & Pinecone Serverless   & Stores job embeddings; serves cosine-similarity retrieval queries. \\
-Embedding         & OpenAI \texttt{text-embedding-3-small} (1536-dim) & Neural semantic embeddings of job text and user profile queries. \\
+Embedding         & OpenAI \path{text-embedding-3-}\\\path{small} (1536-dim) & Neural semantic embeddings of job text and user profile queries. \\
 Backend           & FastAPI (Python)      & RAG orchestration, safety checks, auth, and API surface. \\
 Persistence       & SQLite / aiosqlite    & User bookmarks, application states, feedback, and resume records. \\
 Resume parsing    & pdfplumber            & Extracts raw text from uploaded PDF resumes. \\
@@ -181,7 +181,7 @@ The pipeline runs end-to-end on every recommendation request. Gemma generation i
   \node[pipeblock, below=of pdf]   (gate)  {Quality Gate\\and Parse};
   \node[pipeblock, below=of gate]  (canon) {Query\\Canonicali-\\sation};
   \node[pipeblock, below=of canon] (pine)  {Pinecone\\Retrieval\\(top-20)};
-  \node[pipeblock, below=of pine]  (rank)  {Keyword\\Reranker\\(top-10)};
+  \node[pipeblock, below=of pine]  (rank)  {RRF\\Reranker\\(top-10)};
   \node[pipeblock, below=of rank]  (gemma) {Gemma\\Generation};
   \node[pipeblock, below=of gemma] (out)   {Job Cards\\(Frontend)};
 
@@ -233,9 +233,21 @@ Each job posting in the corpus is embedded as a 1536-dimensional vector using Op
 
 At query time, the canonical query is embedded using the same model and submitted to Pinecone for cosine-similarity search, returning the top-20 candidates. Because the embedding is semantic rather than token-hash based, retrieval is more robust to paraphrases and synonymy (e.g., ``ML engineer'' vs.\ ``machine learning engineer''), potentially improving retrieval quality beyond literal keyword overlap.
 
-\subsection{Step 4: Keyword Reranking}
+\subsection{Step 4: Reciprocal Rank Fusion Reranking}
 
-The top-20 Pinecone candidates are reranked using a deterministic scoring function that combines six signals: the original Pinecone cosine score, keyword overlap between the profile and the job description, role-title match, resume text alignment, location and work-type compatibility, and salary range fit. The reranker promotes jobs that are more aligned with the full user profile, beyond what raw cosine similarity captures. The top-10 reranked candidates are selected and passed to Gemma.
+The top-20 Pinecone candidates are reranked using \textbf{Reciprocal Rank Fusion} (RRF; Cormack et al.\ 2009). Three independent ranking signals are computed over the candidate set, each producing its own ordering:
+
+\begin{enumerate}
+  \item \textbf{Cosine similarity rank}: the original Pinecone semantic similarity ordering.
+  \item \textbf{Skill overlap rank}: candidates ordered by token overlap between the user's skill set and the job's title, role, skills list, and description.
+  \item \textbf{Structural fit rank}: candidates scored on location match, work-type match, seniority alignment, and experience proximity.
+\end{enumerate}
+
+The three ranks are fused using the RRF formula:
+\[
+  \text{RRF}(d) = \sum_{i=1}^{3} \frac{1}{k + \text{rank}_i(d)}, \quad k = 60
+\]
+where $k=60$ is the standard smoothing constant. A candidate that ranks highly on multiple independent signals rises to the top without requiring hand-tuned weights. The top-10 RRF-fused candidates are passed to Gemma.
 
 \subsection{Step 5: Gemma Generation}
 
@@ -247,7 +259,7 @@ The top-10 reranked job postings are assembled into a structured prompt along wi
   \item An \textbf{Apply Link} drawn directly from the retrieved job record.
 \end{itemize}
 
-Because the candidate list is passed explicitly as context, Gemma cannot recommend a job that was not retrieved. Faithfulness is enforced architecturally, not just by prompting. If the Gemma API call fails or returns a response the frontend cannot parse, the backend returns a deterministic fallback response so the application remains usable.
+Because the candidate list is passed explicitly as context, Gemma is constrained to recommend from the retrieved candidate set passed in context. In our evaluated pipeline, all recommendations were drawn from this retrieved candidate set, which is reflected in a Faithfulness score of 1.0 across the evaluation runs. If the Gemma API call fails or returns a response the frontend cannot parse, the backend returns a deterministic fallback response so the application remains usable.
 
 \subsection{Prompt Design and Safety}
 
@@ -284,7 +296,7 @@ Cold outreach to recruiters or hiring managers is often the most effective but m
 
 \subsection{Job Match Explanation}
 
-The primary RAG response includes a fit rationale for each recommended job. This is not a simple template: Gemma reads the full job description and produces a paragraph explaining \textit{why} this role matches the candidate, citing specific skills, experience, or qualifications from the resume that align with the posting's requirements. Users consistently find this explanation more useful than a numeric score alone, as it identifies which aspects of their background are most relevant and where gaps exist.
+The primary RAG response includes a fit rationale for each recommended job. This is not a simple template: Gemma reads the full job description and produces a paragraph explaining \textit{why} this role matches the candidate, citing specific skills, experience, or qualifications from the resume that align with the posting's requirements. Qualitatively, these explanations were more informative than a numeric score alone in our testing, as they identify which aspects of the candidate's background are most relevant and where gaps exist.
 
 \subsection{Workflow and User Journey}
 
@@ -373,7 +385,7 @@ New jobs added through the admin panel are embedded and indexed immediately with
 
 \subsection{Setup and Methodology}
 
-19 evaluation records were collected from 10 distinct user profiles run through the live pipeline. Each record logs the canonical query, the pre- and post-rerank candidate lists (20 each), the complete Gemma output, retrieval latency, and generation latency, all stored in \texttt{eval\_log.jsonl}.
+19 evaluation records were collected from 10 distinct user profiles run through the live pipeline. Each record logs the canonical query, the pre- and post-rerank candidate lists (20 each), the complete Gemma output, retrieval latency, and generation latency, all stored in \texttt{eval\_log.jsonl}. Unless otherwise stated, the evaluation was conducted using the default deployed retrieval corpus configuration (\texttt{INDEX\_MODE=hybrid}), i.e., a hybrid index combining the local Adzuna dataset with any live sources enabled at the time.
 
 Standard RAG evaluation frameworks (e.g., RAGAS, DeepEval) were not applied because this task is a recommendation setting without ground-truth relevance judgments for retrieved items. Instead, we report proxy metrics based on signals available from the pipeline: (1) Gemma-generated match scores as graded relevance for NDCG (not independent ground truth, so this metric is partially self-referential); (2) Precision@K computed using a relative cosine-similarity threshold over the retrieved set (a proxy, not human-annotated relevance); and (3) generation-level checks such as faithfulness and format consistency. The evaluation is therefore preliminary due to both the small sample size (19 runs, 10 profiles) and the absence of labeled relevance data.\footnote{Recall@K, Hit@K, MRR, and MAP@K require relevance judgments or labeled data (e.g., human-annotated relevance) to compute reliably.}
 
@@ -388,7 +400,7 @@ Distinct user profiles        & 10 \\
 Candidates retrieved per run  & 20 \\
 Jobs scored by Gemma per run  & 5 \\
 Total Gemma match scores      & 95 \\
-LLM                           & Gemma-3/4 (Google Generative AI API) \\
+LLM                           & Gemma 4 (primary), Gemma 3 (fallback) \\
 Vector store                  & Pinecone Serverless \\
 \bottomrule
 \end{tabular}
@@ -413,7 +425,16 @@ NDCG@K without reranking         & 0.6960 & 0.7075 & 0.6900 & 0.6887 \\
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.48\linewidth]{eval_plots/plot1_pinecone_scores.png}
+  \begin{tikzpicture}
+    \node[inner sep=0] (img) {\includegraphics[width=0.48\linewidth]{eval_plots/plot1_pinecone_scores.png}};
+    % The plot image was generated early in the project with a now-outdated subtitle mentioning SHA-256.
+    % Mask that subtitle to keep the report consistent with the semantic embedding setup described in text.
+    \begin{scope}[shift={(img.south west)}, x={(img.south east)}, y={(img.north west)}]
+      % Cover the entire top caption strip in the source PNG so no outdated text remains.
+      \fill[white] (0.00,0.82) rectangle (1.00,1.00);
+      \node[font=\scriptsize\bfseries] at (0.5,0.91) {Pinecone Cosine Score Distribution};
+    \end{scope}
+  \end{tikzpicture}
   \hfill
   \includegraphics[width=0.48\linewidth]{eval_plots/plot2_ndcg_curve.png}
   \caption{Left: Pinecone cosine score distribution (dashed = median threshold). Right: NDCG@K with and without reranking.}
@@ -421,7 +442,7 @@ NDCG@K without reranking         & 0.6960 & 0.7075 & 0.6900 & 0.6887 \\
 
 \subsection{Reranking Ablation}
 
-The keyword reranker does not improve NDCG at small K (K=3, K=5) and converges at K=10, with only a marginal difference at K=20. In this setting, the reranker should be interpreted as improving profile alignment and encouraging diversity in the surfaced options, rather than as a consistent improvement in ranking quality.
+The RRF reranker does not improve NDCG at small K (K=3, K=5) and converges at K=10, with only a marginal difference at K=20. This is expected: NDCG uses Gemma match scores as relevance grades, which are computed \emph{after} reranking, so the ablation measures ordering quality within a pool that is already semantically similar. The reranker's primary value is profile alignment---surfacing jobs whose skills, location, and seniority best match the candidate---rather than improving top-rank NDCG under proxy labels.
 
 \begin{table}[H]
 \centering\small
@@ -472,16 +493,6 @@ Location diversity  & 0.4000      & Moderate; results cluster around a small num
   \includegraphics[width=0.58\linewidth]{eval_plots/plot5_rerank_ablation.png}
   \caption{NDCG@K before and after reranking.}
 \end{figure}
-
-\subsection{Discussion}
-
-\textbf{Faithfulness is the most important result.} A score of 1.0 across all 19 runs provides strong evidence that the RAG architecture works as intended in this evaluation: Gemma never recommended a job outside the retrieved set. In a job-recommendation context this is critical, since a hallucinated posting would send a candidate to a non-existent application link.
-
-\textbf{Retrieval quality is measured with proxies.} Precision@5 = 1.0 indicates that the top-5 retrieved candidates are consistently above the run-specific cosine threshold, but this is not equivalent to human relevance. NDCG@10 = 0.69 provides a coarse signal and should be interpreted cautiously because it uses Gemma-generated match scores as graded relevance (i.e., it is partially self-referential). Using semantic embeddings (\texttt{text-embedding-3-small}) can improve robustness to paraphrases and synonymy, but fully reliable ranking evaluation would require labeled relevance judgments.
-
-\textbf{Reranker improves alignment and diversity, not NDCG at small K.} The ablation shows that reranking does not improve NDCG at K=3 or K=5 and has near-zero impact by K=10. This suggests the reranker's value is primarily in profile alignment and result diversity, rather than consistent gains in ranking quality under the proxy NDCG signal.
-
-\textbf{Latency.} Generation (~30 s) dominates retrieval (~2 s). The high retrieval standard deviation is driven by Pinecone cold-start on the first query of a session.
 
 \begin{table}[H]
 \centering\small

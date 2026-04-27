@@ -2911,10 +2911,18 @@ def _retrieval_fingerprint(candidates: list[dict]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
-def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
+def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None, profile_location: str = "") -> list[dict]:
     if not PINECONE_API_KEY:
         log.warning("PINECONE_API_KEY is missing; using local CSV fallback search")
         return _search_jobs_local_csv(query, top_k=top_k)
+
+    # Tokenize requested location for post-filter matching (handles "Mumbai, Maharashtra" vs "Mumbai")
+    location_tokens: set[str] = set()
+    if profile_location:
+        for word in re.split(r"[\s,]+", profile_location.lower()):
+            w = word.strip()
+            if len(w) > 2:
+                location_tokens.add(w)
 
     try:
         index = get_or_create_index()
@@ -2924,13 +2932,16 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
         pinecone_filter = None
         if salary_min > 0:
             pinecone_filter = {"salary_min": {"$gte": salary_min}}
-        results = index.query(vector=query_emb, top_k=top_k, include_metadata=True, filter=pinecone_filter)
+
+        # Over-fetch when a location is requested so post-filtering still yields top_k results
+        fetch_k = (top_k * 4) if location_tokens else top_k
+        results = index.query(vector=query_emb, top_k=fetch_k, include_metadata=True, filter=pinecone_filter)
 
         # Salary metadata can be missing/inconsistent (especially for live feeds).
         # If a strict salary filter wipes out retrieval, retry without the filter.
         if salary_min > 0 and not results.matches:
             log.info("Salary-filtered query returned 0 matches; retrying without salary filter")
-            results = index.query(vector=query_emb, top_k=top_k, include_metadata=True)
+            results = index.query(vector=query_emb, top_k=fetch_k, include_metadata=True)
 
         if not results.matches:
             log.info("Vector retrieval returned 0 matches; using local CSV fallback search")
@@ -2944,6 +2955,24 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
             if job["job_key"] in suppressed:
                 continue
             out.append(job)
+
+        # Apply location post-filter: keep jobs whose location/country contains any requested token,
+        # or remote jobs which are always relevant. Fall back to unfiltered if too few results.
+        if location_tokens:
+            def _location_matches(job: dict) -> bool:
+                job_loc = (job.get("location", "") + " " + job.get("country", "")).lower()
+                if re.search(r"\bremote\b", job.get("work_type", "").lower()):
+                    return True
+                return bool(location_tokens & set(re.split(r"[\s,]+", job_loc)))
+
+            location_filtered = [j for j in out if _location_matches(j)]
+            if len(location_filtered) >= max(1, top_k // 2):
+                log.info("Location filter '%s' retained %d/%d candidates", profile_location, len(location_filtered), len(out))
+                out = location_filtered[:top_k]
+            else:
+                log.info("Location filter '%s' yielded only %d results (need %d); using unfiltered results", profile_location, len(location_filtered), top_k)
+                out = out[:top_k]
+
         return _stable_sort_candidates(out)
     except Exception as exc:
         msg = str(exc).lower()
@@ -2952,13 +2981,13 @@ def search_jobs(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int
             return _search_jobs_local_csv(query, top_k=top_k)
         raise
 
-def search_jobs_cached(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None) -> list[dict]:
+def search_jobs_cached(query: str, top_k: int = TOP_K, profile_salary_min: Optional[int] = None, profile_location: str = "") -> list[dict]:
     canonical_query = canonicalize_job_query(query)
-    key = hashlib.md5(f"{canonical_query}|{top_k}|{profile_salary_min}".encode()).hexdigest()
+    key = hashlib.md5(f"{canonical_query}|{top_k}|{profile_salary_min}|{profile_location.lower().strip()}".encode()).hexdigest()
     if key in _search_cache:
         cached = _search_cache[key]
     else:
-        cached = search_jobs(canonical_query, top_k, profile_salary_min=profile_salary_min)
+        cached = search_jobs(canonical_query, top_k, profile_salary_min=profile_salary_min, profile_location=profile_location)
         _search_cache[key] = cached
 
     suppressed = _load_suppressed_job_keys_sync()
@@ -3103,9 +3132,21 @@ def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
 
 def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") -> list[dict]:
     """
-    Score-boost reranking: augments Pinecone cosine similarity with keyword
-    signals from the full profile (skills, role, industry, education, CV text)
-    so the top-10 passed to Gemma are truly the best matches.
+    Reciprocal Rank Fusion (RRF) reranking.
+
+    Runs three independent ranking signals over the candidate set, assigns a
+    rank from each, then fuses them with the RRF formula:
+        RRF(d) = Σ  1 / (k + rank_i(d))
+    where k=60 is the standard smoothing constant (Cormack et al. 2009).
+
+    The three signals are:
+      1. Pinecone cosine similarity rank  (semantic)
+      2. Skill overlap rank               (exact skill token matching)
+      3. Structural fit rank              (location, work type, seniority, experience)
+
+    No magic-number weights. A candidate that ranks highly on multiple
+    independent signals rises to the top; a candidate strong on only one
+    signal is appropriately discounted.
     """
     if not profile or not candidates:
         return candidates
@@ -3115,37 +3156,34 @@ def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") ->
         def _meets_experience(c: dict) -> bool:
             exp_req = _safe_str(c.get("experience", ""))
             if not exp_req:
-                return True  # no requirement stated — always include
+                return True
             exp_nums = re.findall(r"\d+", exp_req)
             if not exp_nums:
-                return True  # can't parse — include by default
-            min_req = int(exp_nums[0])
-            return profile.experience >= min_req
+                return True
+            return profile.experience >= int(exp_nums[0])
         candidates = [c for c in candidates if _meets_experience(c)]
         if not candidates:
             return candidates
 
-    # Build a set of normalised profile tokens to match against
-    profile_tokens: set[str] = set()
+    RRF_K = 60  # standard constant — dampens the effect of very high ranks
+
+    # ── Pre-compute profile token sets ────────────────────────────────────────
+    profile_skill_tokens: set[str] = set()
     for skill in (profile.skills or []):
-        profile_tokens.add(skill.lower().strip())
-    for word in re.split(r"[\s,|/]+", (profile.desiredRole or "") + " " + (profile.industry or "") + " " + (profile.education or "")):
+        for tok in re.split(r"[\s,/+#.]+", skill.lower()):
+            if len(tok) > 1:
+                profile_skill_tokens.add(tok.strip())
+
+    profile_role_tokens: set[str] = set()
+    for word in re.split(r"[\s,|/]+", (profile.desiredRole or "") + " " + (profile.industry or "")):
         w = word.lower().strip()
         if len(w) > 2:
-            profile_tokens.add(w)
-    # Add past job title tokens
-    for title in (profile.jobTitlesHeld or []):
-        for word in re.split(r"[\s,|/]+", title.lower()):
-            w = word.strip()
-            if len(w) > 2:
-                profile_tokens.add(w)
-    # Add significant words from CV text
+            profile_role_tokens.add(w)
     if profile.resumeText:
         for word in re.split(r"\W+", profile.resumeText[:2000].lower()):
             if len(word) > 3:
-                profile_tokens.add(word)
+                profile_role_tokens.add(word)
 
-    # Pre-compute profile location tokens for location matching
     profile_location_tokens: set[str] = set()
     if profile.location:
         for word in re.split(r"[\s,]+", profile.location.lower()):
@@ -3153,92 +3191,76 @@ def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") ->
             if len(w) > 2:
                 profile_location_tokens.add(w)
 
-    # Pre-compute certification tokens for cert overlap matching
-    profile_cert_tokens: set[str] = set()
-    for cert in (profile.certifications or []):
-        for word in re.split(r"[\s,]+", cert.lower()):
-            w = word.strip()
-            if len(w) > 2:
-                profile_cert_tokens.add(w)
+    # ── Signal 1: cosine rank (already ordered by Pinecone score) ─────────────
+    cosine_rank: dict[int, int] = {i: i for i in range(len(candidates))}
 
-    def _boost(c: dict) -> float:
-        base = float(c.get("score") or 0)
-        if not profile_tokens:
-            return base
-        # Check job fields for token overlap
-        job_text = " ".join([
-            c.get("title", ""), c.get("role", ""), c.get("description", ""),
-            c.get("sector", ""), c.get("industry", ""),
-            c.get("qualifications", ""), c.get("responsibilities", ""),
+    # ── Signal 2: skill overlap rank ──────────────────────────────────────────
+    def _skill_score(c: dict) -> float:
+        job_skill_text = " ".join([
+            c.get("title", ""), c.get("role", ""),
             " ".join(c.get("skills", [])),
+            c.get("description", "")[:500],
         ]).lower()
-        job_tokens = set(re.split(r"\W+", job_text))
-        overlap = len(profile_tokens & job_tokens)
-        # Small additive boost (max ~0.15) so cosine score still dominates
-        boost = min(overlap * 0.005, 0.15)
+        job_skill_tokens = set(re.split(r"\W+", job_skill_text))
+        skill_overlap = len(profile_skill_tokens & job_skill_tokens)
+        role_overlap = len(profile_role_tokens & job_skill_tokens)
+        return skill_overlap * 2.0 + role_overlap  # skills weighted more than role words
 
-        # Experience alignment boost
-        if profile.experience:
-            exp_req = _safe_str(c.get("experience", ""))
-            exp_nums = re.findall(r"\d+", exp_req)
-            if exp_nums:
-                req_years = int(exp_nums[0])
-                diff = abs(profile.experience - req_years)
-                if diff <= 1:
-                    boost += 0.05
-                elif diff <= 3:
-                    boost += 0.02
+    skill_order = sorted(range(len(candidates)), key=lambda i: _skill_score(candidates[i]), reverse=True)
+    skill_rank: dict[int, int] = {idx: rank for rank, idx in enumerate(skill_order)}
 
-        # Location match boost
+    # ── Signal 3: structural fit rank ─────────────────────────────────────────
+    seniority_map = {
+        "junior":  ["junior", "entry", "associate", "graduate", "trainee"],
+        "mid":     ["mid", "intermediate", "analyst", "engineer"],
+        "senior":  ["senior", "sr.", "lead", "principal"],
+        "lead":    ["lead", "principal", "staff", "architect"],
+        "manager": ["manager", "head", "director", "vp"],
+    }
+
+    def _structural_score(c: dict) -> float:
+        score = 0.0
+        # Location
         if profile_location_tokens:
-            job_location = (c.get("location", "") + " " + c.get("country", "")).lower()
-            job_location_tokens = set(re.split(r"[\s,]+", job_location))
-            if profile_location_tokens & job_location_tokens:
-                boost += 0.06
-            # Remote jobs are relevant regardless of location
+            job_loc = (c.get("location", "") + " " + c.get("country", "")).lower()
+            job_loc_tokens = set(re.split(r"[\s,]+", job_loc))
+            if profile_location_tokens & job_loc_tokens:
+                score += 3.0
             elif re.search(r"\bremote\b", c.get("work_type", "").lower()):
-                boost += 0.02
-
-        # Work type match boost
+                score += 1.0
+        # Work type
         if profile.workType and profile.workType != "Any":
-            job_work_type = c.get("work_type", "").lower()
-            if profile.workType.lower() in job_work_type:
-                boost += 0.04
-
-        # Industry alignment boost
-        if profile.industry:
-            job_industry = (c.get("industry", "") + " " + c.get("sector", "")).lower()
-            profile_industry_tokens = set(re.split(r"[\s,|/]+", profile.industry.lower()))
-            job_industry_tokens = set(re.split(r"\W+", job_industry))
-            if profile_industry_tokens & job_industry_tokens:
-                boost += 0.04
-
-        # Certification overlap boost
-        if profile_cert_tokens:
-            job_quals = (c.get("qualifications", "") + " " + c.get("description", "")).lower()
-            job_cert_tokens = set(re.split(r"\W+", job_quals))
-            cert_overlap = len(profile_cert_tokens & job_cert_tokens)
-            boost += min(cert_overlap * 0.01, 0.04)
-
-        # Seniority alignment boost
+            if profile.workType.lower() in c.get("work_type", "").lower():
+                score += 2.0
+        # Seniority
         if profile.seniority:
-            job_title_lower = c.get("title", "").lower()
-            seniority_lower = profile.seniority.lower()
-            seniority_map = {
-                "junior": ["junior", "entry", "associate", "graduate", "trainee"],
-                "mid": ["mid", "intermediate", "analyst", "engineer"],
-                "senior": ["senior", "sr.", "sr ", "lead", "principal"],
-                "lead": ["lead", "principal", "staff", "architect"],
-                "manager": ["manager", "head", "director", "vp"],
-            }
-            job_seniority_words = seniority_map.get(seniority_lower, [])
-            if any(w in job_title_lower for w in job_seniority_words):
-                boost += 0.04
+            words = seniority_map.get(profile.seniority.lower(), [])
+            if any(w in c.get("title", "").lower() for w in words):
+                score += 2.0
+        # Experience proximity
+        if profile.experience is not None:
+            exp_nums = re.findall(r"\d+", _safe_str(c.get("experience", "")))
+            if exp_nums:
+                diff = abs(profile.experience - int(exp_nums[0]))
+                if diff <= 1:
+                    score += 2.0
+                elif diff <= 3:
+                    score += 1.0
+        return score
 
-        return base + boost
+    struct_order = sorted(range(len(candidates)), key=lambda i: _structural_score(candidates[i]), reverse=True)
+    struct_rank: dict[int, int] = {idx: rank for rank, idx in enumerate(struct_order)}
 
-    reranked = sorted(candidates, key=_boost, reverse=True)
-    # Re-assign scores so Gemma sees the reranked order
+    # ── Fuse with RRF ─────────────────────────────────────────────────────────
+    def _rrf_score(i: int) -> float:
+        return (
+            1.0 / (RRF_K + cosine_rank[i]) +
+            1.0 / (RRF_K + skill_rank[i]) +
+            1.0 / (RRF_K + struct_rank[i])
+        )
+
+    reranked_indices = sorted(range(len(candidates)), key=_rrf_score, reverse=True)
+    reranked = [candidates[i] for i in reranked_indices]
     for i, c in enumerate(reranked):
         c["rerank_position"] = i + 1
     return reranked
@@ -3396,9 +3418,10 @@ async def webhook(request: Request):
     session_id = req.sessionId or str(uuid.uuid4())
     history = get_session_history(session_id)
     profile_salary_min = req.profile.salaryMin if req.profile else None
+    profile_location = (req.profile.location or "") if req.profile else ""
     _t_retrieval_start = time.perf_counter()
     try:
-        candidates = search_jobs_cached(query, top_k=TOP_K, profile_salary_min=profile_salary_min)
+        candidates = search_jobs_cached(query, top_k=TOP_K, profile_salary_min=profile_salary_min, profile_location=profile_location)
     except Exception as exc:
         log.exception("Vector search failed")
         raise HTTPException(status_code=503, detail=f"Search unavailable: {exc}")
@@ -3456,9 +3479,10 @@ async def debug_retrieval(request: Request, req: DebugRetrievalRequest):
 
     top_k = max(1, min(int(req.topK or 12), 50))
     profile_salary_min = req.profile.salaryMin if req.profile else None
+    profile_location = (req.profile.location or "") if req.profile else ""
     candidates = rank_candidates_deterministically(
         query,
-        search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min),
+        search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min, profile_location=profile_location),
     )
     compact = []
     for c in candidates:
@@ -3500,7 +3524,8 @@ async def debug_rag_trace(request: Request, req: DebugRetrievalRequest):
     query = canonicalize_job_query(raw_query)
     top_k = max(1, min(int(req.topK or TOP_K), 50))
     profile_salary_min = req.profile.salaryMin if req.profile else None
-    candidates = search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min)
+    profile_location = (req.profile.location or "") if req.profile else ""
+    candidates = search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min, profile_location=profile_location)
     if req.profile:
         candidates = _rerank_candidates(candidates, req.profile)
     if not _gemma_job_results_enabled():
