@@ -798,8 +798,6 @@ function buildPrompt(p) {
     prompt += `Work Authorization Status: ${p.workAuth}\n`;
   }
 
-  if (p.additional) prompt += `\nAdditional Preferences:\n${p.additional}\n`;
-
   prompt += `\nPlease find the best matching jobs for my profile from the available postings.`;
 
   return prompt;
@@ -820,7 +818,6 @@ function getCurrentProfileFromForm() {
     companySize: document.getElementById('companySize').value.trim() || 'Any',
     benefits: [],
     workAuth: document.getElementById('workAuth').value.trim() || 'Not Specified',
-    additional: document.getElementById('additional').value.trim(),
   };
 }
 
