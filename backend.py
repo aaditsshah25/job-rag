@@ -3308,7 +3308,7 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
     )
     full_prompt = f"{system}\n\n{user_msg}"
     # Gemma 4 uses a reasoning/thinking mode and needs more tokens (thinking + output)
-    max_tokens = 4096 if CHAT_MODEL in _GEMMA4_MODELS else 1500
+    max_tokens = 4096 if CHAT_MODEL in _GEMMA4_MODELS else 4096
     try:
         text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=max_tokens)
         text = (text or "").strip()
