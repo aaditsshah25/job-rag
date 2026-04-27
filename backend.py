@@ -29,6 +29,7 @@ import uuid
 import io
 import time
 import sqlite3
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -2663,8 +2664,10 @@ def _deterministic_match_score(query: str, candidate: dict) -> float:
     ]).lower()
     candidate_tokens = set(_tokenize_query(candidate_text))
     overlap = len(query_tokens & candidate_tokens) / max(len(query_tokens), 1)
-    semantic = float(candidate.get("score", 0) or 0)
-    return round((0.75 * semantic) + (0.25 * overlap), 6)
+    semantic = float(candidate.get("rerank_score", candidate.get("score", 0)) or 0)
+    lexical = float(candidate.get("lexical_score", 0) or 0)
+    profile = float(candidate.get("profile_score", 0) or 0)
+    return round((0.55 * semantic) + (0.2 * lexical) + (0.15 * profile) + (0.1 * overlap), 6)
 
 
 def rank_candidates_deterministically(query: str, candidates: list[dict]) -> list[dict]:
@@ -2842,7 +2845,8 @@ def build_llm_prompt(user_query: str, candidates: list[dict], resume_text: str =
         f"USER PROFILE & JOB REQUEST:\n{user_query}\n{cv_section}\n"
         f"CANDIDATE JOB POSTINGS ({len(candidates)} retrieved by semantic search, already reranked):\n"
         f"{candidate_text}\n"
-        f"Select the top {TOP_N_RESULTS} best matches for this user and respond in the required Markdown format."
+        f"The candidates are already sorted best-to-worst by a deterministic reranker. "
+        f"Use exactly the first {TOP_N_RESULTS} candidates in the same order and respond in the required Markdown format."
     )
 
 def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
@@ -2887,58 +2891,143 @@ def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
     return "\n".join(lines)
 
 
-def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") -> list[dict]:
+def _rerank_candidates(query: str, candidates: list[dict], profile: "UserProfile | None") -> list[dict]:
     """
-    Score-boost reranking: augments Pinecone cosine similarity with keyword
-    signals from the full profile (skills, role, industry, education, CV text)
-    so the top-10 passed to Gemma are truly the best matches.
+    Advanced deterministic hybrid reranking:
+    1) semantic score from vector retrieval
+    2) lexical BM25-style relevance to canonical query terms
+    3) profile skill/role/industry alignment
+    4) reciprocal-rank fusion for robust final ordering
     """
-    if not profile or not candidates:
-        return candidates
+    if not candidates:
+        return []
 
-    # Build a set of normalised profile tokens to match against
-    profile_tokens: set[str] = set()
-    for skill in (profile.skills or []):
-        profile_tokens.add(skill.lower().strip())
-    for word in re.split(r"[\s,|/]+", (profile.desiredRole or "") + " " + (profile.industry or "") + " " + (profile.education or "")):
-        w = word.lower().strip()
-        if len(w) > 2:
-            profile_tokens.add(w)
-    # Add significant words from CV text
-    if profile.resumeText:
-        for word in re.split(r"\W+", profile.resumeText[:2000].lower()):
-            if len(word) > 3:
-                profile_tokens.add(word)
+    enriched = [dict(c) for c in candidates]
+    docs: list[list[str]] = []
+    title_tokens_per_doc: list[set[str]] = []
+    profile_terms: set[str] = set()
 
-    def _boost(c: dict) -> float:
-        base = float(c.get("score") or 0)
-        if not profile_tokens:
-            return base
-        # Check job fields for token overlap
-        job_text = " ".join([
-            c.get("title", ""), c.get("role", ""), c.get("description", ""),
-            c.get("sector", ""), c.get("industry", ""),
-            " ".join(c.get("skills", [])),
-        ]).lower()
-        job_tokens = set(re.split(r"\W+", job_text))
-        overlap = len(profile_tokens & job_tokens)
-        # Small additive boost (max ~0.15) so cosine score still dominates
-        boost = min(overlap * 0.005, 0.15)
-        # Experience alignment boost
-        if profile.experience:
+    if profile:
+        for skill in (profile.skills or []):
+            profile_terms.update(_tokenize_query(skill))
+        profile_terms.update(_tokenize_query(profile.desiredRole or ""))
+        profile_terms.update(_tokenize_query(profile.industry or ""))
+        profile_terms.update(_tokenize_query(profile.education or ""))
+        if profile.resumeText:
+            profile_terms.update(_tokenize_query((profile.resumeText or "")[:2400]))
+
+    query_terms = set(_tokenize_query(query))
+    all_terms = sorted(query_terms | profile_terms)
+    if not all_terms:
+        all_terms = sorted(set(_tokenize_query(query)))
+
+    for c in enriched:
+        doc_text = " ".join(
+            [
+                _safe_str(c.get("title", "")),
+                _safe_str(c.get("role", "")),
+                _safe_str(c.get("company", "")),
+                _safe_str(c.get("location", "")),
+                _safe_str(c.get("country", "")),
+                _safe_str(c.get("sector", "")),
+                _safe_str(c.get("industry", "")),
+                _safe_str(c.get("description", "")),
+                _safe_str(c.get("responsibilities", "")),
+                " ".join(c.get("skills", []) if isinstance(c.get("skills"), list) else []),
+            ]
+        ).lower()
+        docs.append(_tokenize_query(doc_text))
+        title_tokens_per_doc.append(set(_tokenize_query(f"{c.get('title', '')} {c.get('role', '')}")))
+
+    # BM25-like lexical scoring over the retrieved candidate set.
+    n_docs = len(docs)
+    avgdl = (sum(len(d) for d in docs) / n_docs) if n_docs else 1.0
+    df = Counter()
+    for d in docs:
+        df.update(set(d))
+    k1 = 1.5
+    b = 0.75
+    lexical_raw: list[float] = []
+    for d in docs:
+        tf = Counter(d)
+        dl = max(len(d), 1)
+        score = 0.0
+        for term in all_terms:
+            freq = tf.get(term, 0)
+            if freq <= 0:
+                continue
+            doc_freq = df.get(term, 0)
+            idf = math.log(1.0 + (n_docs - doc_freq + 0.5) / (doc_freq + 0.5))
+            denom = freq + k1 * (1.0 - b + b * (dl / max(avgdl, 1e-9)))
+            score += idf * ((freq * (k1 + 1.0)) / max(denom, 1e-9))
+        lexical_raw.append(score)
+
+    def _minmax(values: list[float], default: float = 0.0) -> list[float]:
+        if not values:
+            return []
+        lo, hi = min(values), max(values)
+        if hi - lo < 1e-9:
+            return [default for _ in values]
+        return [(v - lo) / (hi - lo) for v in values]
+
+    semantic_raw = [float(c.get("score", 0) or 0) for c in enriched]
+    semantic_norm = _minmax(semantic_raw, default=0.5)
+    lexical_norm = _minmax(lexical_raw, default=0.0)
+
+    profile_raw: list[float] = []
+    for idx, c in enumerate(enriched):
+        doc_tokens = set(docs[idx])
+        title_tokens = title_tokens_per_doc[idx]
+        profile_overlap = (len(profile_terms & doc_tokens) / max(len(profile_terms), 1)) if profile_terms else 0.0
+        query_title_overlap = len(query_terms & title_tokens) / max(len(query_terms), 1) if query_terms else 0.0
+        exp_bonus = 0.0
+        if profile and profile.experience:
             exp_req = _safe_str(c.get("experience", ""))
             exp_nums = re.findall(r"\d+", exp_req)
             if exp_nums:
                 req_years = int(exp_nums[0])
-                diff = abs(profile.experience - req_years)
+                diff = abs(int(profile.experience) - req_years)
                 if diff <= 1:
-                    boost += 0.05
+                    exp_bonus = 1.0
                 elif diff <= 3:
-                    boost += 0.02
-        return base + boost
+                    exp_bonus = 0.5
+        profile_raw.append((0.65 * profile_overlap) + (0.25 * query_title_overlap) + (0.10 * exp_bonus))
+    profile_norm = _minmax(profile_raw, default=0.0)
 
-    reranked = sorted(candidates, key=_boost, reverse=True)
-    # Re-assign scores so Gemma sees the reranked order
+    semantic_rank = sorted(range(n_docs), key=lambda i: (-semantic_norm[i], _candidate_stable_key(enriched[i])))
+    lexical_rank = sorted(range(n_docs), key=lambda i: (-lexical_norm[i], _candidate_stable_key(enriched[i])))
+    profile_rank = sorted(range(n_docs), key=lambda i: (-profile_norm[i], _candidate_stable_key(enriched[i])))
+    semantic_pos = {idx: rank for rank, idx in enumerate(semantic_rank, start=1)}
+    lexical_pos = {idx: rank for rank, idx in enumerate(lexical_rank, start=1)}
+    profile_pos = {idx: rank for rank, idx in enumerate(profile_rank, start=1)}
+
+    rrf_k = 60.0
+    for i, c in enumerate(enriched):
+        fused_rank_score = (
+            (0.50 / (rrf_k + semantic_pos[i]))
+            + (0.30 / (rrf_k + lexical_pos[i]))
+            + (0.20 / (rrf_k + profile_pos[i]))
+        )
+        calibrated = (
+            (0.55 * semantic_norm[i])
+            + (0.30 * lexical_norm[i])
+            + (0.15 * profile_norm[i])
+        )
+        c["semantic_score"] = round(float(semantic_norm[i]), 6)
+        c["lexical_score"] = round(float(lexical_norm[i]), 6)
+        c["profile_score"] = round(float(profile_norm[i]), 6)
+        c["fusion_score"] = round(float(fused_rank_score), 8)
+        c["rerank_score"] = round(float(calibrated + fused_rank_score), 8)
+
+    reranked = sorted(
+        enriched,
+        key=lambda c: (
+            -float(c.get("rerank_score", 0) or 0),
+            -float(c.get("fusion_score", 0) or 0),
+            -float(c.get("semantic_score", c.get("score", 0)) or 0),
+            _candidate_stable_key(c),
+        ),
+    )
     for i, c in enumerate(reranked):
         c["rerank_position"] = i + 1
     return reranked
@@ -2951,6 +3040,17 @@ def _is_renderable_jobmatch_output(text: str) -> bool:
     has_heading = "# Your Job Match Results" in text
     has_job_blocks = "### " in text
     return has_heading or has_job_blocks
+
+
+def _extract_job_headings(text: str) -> list[tuple[str, str]]:
+    headings: list[tuple[str, str]] = []
+    for line in (text or "").splitlines():
+        m = re.match(r"^\s*###\s*(.+?)\s*@\s*(.+?)\s*$", line)
+        if m:
+            title = _safe_str(m.group(1)).lower()
+            company = _safe_str(m.group(2)).lower()
+            headings.append((title, company))
+    return headings
 
 
 def generate_response(user_query: str, candidates: list[dict], history: list = None, resume_text: str = "") -> str:
@@ -2967,7 +3067,7 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
     # Gemma 4 uses a reasoning/thinking mode and needs more tokens (thinking + output)
     max_tokens = 4096 if CHAT_MODEL in _GEMMA4_MODELS else 1500
     try:
-        text = _gemini_http_generate(full_prompt, temperature=0.3, max_tokens=max_tokens)
+        text = _gemini_http_generate(full_prompt, temperature=0.0, max_tokens=max_tokens)
         text = (text or "").strip()
     except Exception as exc:
         log.warning("Gemini/Gemma generation failed (%s: %s), falling back to deterministic response", type(exc).__name__, exc)
@@ -2992,6 +3092,23 @@ def generate_response(user_query: str, candidates: list[dict], history: list = N
         return _basic_jobmatch_markdown(
             ranked_candidates,
             "AI output format was inconsistent, so a reliable fallback format was used.",
+        )
+
+    # Enforce deterministic top-job identities even when using LLM-generated reasoning text.
+    expected = [
+        (
+            _safe_str(c.get("title", "")).lower(),
+            _safe_str(c.get("company", "")).lower(),
+        )
+        for c in candidates[: max(1, TOP_N_RESULTS)]
+    ]
+    actual = _extract_job_headings(text)[: len(expected)]
+    if not actual or actual != expected[: len(actual)]:
+        log.warning("LLM response changed ranked jobs/order; falling back to deterministic output.")
+        ranked_candidates = rank_candidates_deterministically(user_query, candidates)
+        return _basic_jobmatch_markdown(
+            ranked_candidates,
+            "Results are pinned to deterministic ranking for repeatable top-job ordering.",
         )
     return text
 
@@ -3099,7 +3216,7 @@ async def webhook(request: Request):
 
     # Rerank candidates using profile signals before sending to Gemma
     profile_for_rerank = req.profile if req.profile else None
-    candidates = _rerank_candidates(candidates, profile_for_rerank)
+    candidates = _rerank_candidates(query, candidates, profile_for_rerank)
     log.info("[%s] Reranked %d candidates; top: %s", request_id, len(candidates), candidates[0].get("title", "") if candidates else "none")
 
     try:
@@ -3142,10 +3259,12 @@ async def debug_retrieval(request: Request, req: DebugRetrievalRequest):
 
     top_k = max(1, min(int(req.topK or 12), 50))
     profile_salary_min = req.profile.salaryMin if req.profile else None
-    candidates = rank_candidates_deterministically(
+    candidates = _rerank_candidates(
         query,
         search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min),
+        req.profile if req.profile else None,
     )
+    candidates = rank_candidates_deterministically(query, candidates)
     compact = []
     for c in candidates:
         compact.append({
@@ -3153,8 +3272,11 @@ async def debug_retrieval(request: Request, req: DebugRetrievalRequest):
             "company": c.get("company", ""),
             "score": c.get("score", 0),
             "deterministic_score": c.get("deterministic_score", c.get("score", 0)),
-            "semantic_score": c.get("score", 0),
-            "lexical_score": 0,
+            "semantic_score": c.get("semantic_score", c.get("score", 0)),
+            "lexical_score": c.get("lexical_score", 0),
+            "profile_score": c.get("profile_score", 0),
+            "fusion_score": c.get("fusion_score", 0),
+            "rerank_score": c.get("rerank_score", c.get("score", 0)),
             "location": c.get("location", ""),
             "country": c.get("country", ""),
             "work_type": c.get("work_type", ""),
@@ -3188,7 +3310,7 @@ async def debug_rag_trace(request: Request, req: DebugRetrievalRequest):
     profile_salary_min = req.profile.salaryMin if req.profile else None
     candidates = search_jobs_cached(query, top_k=top_k, profile_salary_min=profile_salary_min)
     if req.profile:
-        candidates = _rerank_candidates(candidates, req.profile)
+        candidates = _rerank_candidates(query, candidates, req.profile)
     if not _gemma_job_results_enabled():
         candidates = rank_candidates_deterministically(query, candidates)
     prompt = build_llm_prompt(query, candidates, resume_text=(req.profile.resumeText if req.profile else ""))

@@ -202,6 +202,67 @@ def test_debug_retrieval_is_stable_across_paraphrases_and_injection():
         db_path.unlink()
 
 
+def test_debug_retrieval_same_profile_is_repeatable_across_many_calls():
+    client_ctx, db_path = make_client()
+    with client_ctx as client:
+        jobs = [
+            {
+                "title": "Data Analyst",
+                "role": "Data Analyst",
+                "company": "Alpha Analytics",
+                "location": "Mumbai",
+                "skills": ["Python", "SQL", "Tableau"],
+                "description": "Build dashboards and analyze business data using Python and SQL.",
+                "source": "manual",
+            },
+            {
+                "title": "Business Analyst",
+                "role": "Business Analyst",
+                "company": "Insight Works",
+                "location": "Bengaluru",
+                "skills": ["SQL", "Excel", "Power BI"],
+                "description": "Translate business requirements into KPIs and decision dashboards.",
+                "source": "manual",
+            },
+            {
+                "title": "Marketing Associate",
+                "role": "Marketing Associate",
+                "company": "Beta Brands",
+                "location": "Delhi",
+                "skills": ["Content", "SEO"],
+                "description": "Run campaigns and content calendars.",
+                "source": "manual",
+            },
+        ]
+        for job in jobs:
+            response = client.post("/jobs", json=job)
+            assert response.status_code == 200
+
+        payload = {
+            "profile": {
+                "desiredRole": "Data Analyst",
+                "skills": ["Python", "SQL", "Tableau"],
+                "location": "Mumbai",
+                "resumeText": "Data analyst with Python and SQL dashboarding experience.",
+            },
+            "topK": 5,
+        }
+
+        snapshots = [client.post("/debug/retrieval", json=payload).json() for _ in range(10)]
+        fingerprints = {snap["retrieval_fingerprint"] for snap in snapshots}
+        assert len(fingerprints) == 1
+
+        first_titles = [
+            (row.get("title"), row.get("company"))
+            for row in snapshots[0]["jobs"][:3]
+        ]
+        for snap in snapshots[1:]:
+            titles = [(row.get("title"), row.get("company")) for row in snap["jobs"][:3]]
+            assert titles == first_titles
+    if db_path.exists():
+        db_path.unlink()
+
+
 def test_webhook_output_does_not_echo_prompt_injection_text():
     client_ctx, db_path = make_client()
     with client_ctx as client:
