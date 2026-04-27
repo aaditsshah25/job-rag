@@ -3125,38 +3125,6 @@ def _rerank_candidates(candidates: list[dict], profile: "UserProfile | None") ->
         if not candidates:
             return candidates
 
-    # Hard filter: location — only keep jobs whose location matches the profile city/region.
-    # Remote jobs are exempt from this filter (they have no physical location requirement).
-    if profile.location and profile.location.strip():
-        _loc_tokens: set[str] = set()
-        for _w in re.split(r"[\s,]+", profile.location.lower()):
-            _w = _w.strip()
-            if len(_w) > 2:
-                _loc_tokens.add(_w)
-        if _loc_tokens:
-            def _location_matches(c: dict) -> bool:
-                job_wt = _safe_str(c.get("work_type", "")).lower()
-                if re.search(r"\bremote\b", job_wt):
-                    return True  # remote jobs have no physical location
-                job_loc = (_safe_str(c.get("location", "")) + " " + _safe_str(c.get("country", ""))).lower()
-                job_loc_tokens = set(re.split(r"[\s,]+", job_loc))
-                return bool(_loc_tokens & job_loc_tokens)
-            candidates = [c for c in candidates if _location_matches(c)]
-            if not candidates:
-                return candidates
-
-    # Hard filter: work type — only keep jobs that match the requested work type.
-    if profile.workType and profile.workType.strip().lower() not in ("any", ""):
-        _wt_required = profile.workType.strip().lower()
-        def _work_type_matches(c: dict) -> bool:
-            job_wt = _safe_str(c.get("work_type", "")).lower()
-            if not job_wt:
-                return True  # no work type listed — include by default
-            return _wt_required in job_wt
-        candidates = [c for c in candidates if _work_type_matches(c)]
-        if not candidates:
-            return candidates
-
     # Build a set of normalised profile tokens to match against
     profile_tokens: set[str] = set()
     for skill in (profile.skills or []):
