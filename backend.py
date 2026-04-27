@@ -3470,17 +3470,6 @@ def _is_renderable_jobmatch_output(text: str) -> bool:
     return has_heading or has_job_blocks
 
 
-def _extract_job_headings(text: str) -> list[tuple[str, str]]:
-    headings: list[tuple[str, str]] = []
-    for line in (text or "").splitlines():
-        m = re.match(r"^\s*###\s*(.+?)\s*@\s*(.+?)\s*$", line)
-        if m:
-            title = _safe_str(m.group(1)).lower()
-            company = _safe_str(m.group(2)).lower()
-            headings.append((title, company))
-    return headings
-
-
 def _llm_job_ranking_enabled() -> bool:
     return bool(GOOGLE_API_KEY) and _GENAI_AVAILABLE and ENABLE_LLM_JOB_RANKING
 
