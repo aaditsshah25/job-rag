@@ -137,7 +137,7 @@ if CHAT_MODEL != _configured_chat_model:
         CHAT_MODEL,
     )
 TOP_K             = int(os.getenv("TOP_K", "20"))
-TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "10"))
+TOP_N_RESULTS     = int(os.getenv("TOP_N_RESULTS", "5"))
 _DEFAULT_ENABLE_LLM_JOB_RANKING = "1" if GOOGLE_API_KEY else "0"
 ENABLE_LLM_JOB_RANKING = os.getenv("ENABLE_LLM_JOB_RANKING", _DEFAULT_ENABLE_LLM_JOB_RANKING).strip().lower() in {"1", "true", "yes", "on"}
 INDEX_MODE        = os.getenv("INDEX_MODE", "hybrid").strip().lower()
@@ -2899,131 +2899,6 @@ def rank_candidates_deterministically(query: str, candidates: list[dict]) -> lis
     )
 
 
-def _normalize_work_type(value: str) -> str:
-    text = _safe_str(value).lower()
-    if not text:
-        return ""
-    if "remote" in text:
-        return "remote"
-    if "hybrid" in text:
-        return "hybrid"
-    if "on-site" in text or "onsite" in text or "on site" in text:
-        return "onsite"
-    return text
-
-
-def _role_matches_preference(candidate: dict, desired_role: str) -> bool:
-    pref = _safe_str(desired_role).lower()
-    if not pref:
-        return True
-    hay = " ".join([
-        _safe_str(candidate.get("title", "")),
-        _safe_str(candidate.get("role", "")),
-    ]).lower()
-    if not hay:
-        return False
-    if pref in hay:
-        return True
-    pref_tokens = [t for t in _tokenize_query(pref) if len(t) >= 3]
-    if not pref_tokens:
-        return True
-    hit_count = sum(1 for token in pref_tokens if token in hay)
-    return hit_count >= max(1, math.ceil(len(pref_tokens) * 0.5))
-
-
-def _location_matches_preference(candidate: dict, location: str) -> bool:
-    preferred = _safe_str(location).lower()
-    if not preferred:
-        return True
-    hay = " ".join([
-        _safe_str(candidate.get("location", "")),
-        _safe_str(candidate.get("country", "")),
-    ]).lower()
-    if not hay:
-        return False
-    choices = [part.strip() for part in re.split(r"[,/;|]", preferred) if part.strip()]
-    if not choices:
-        choices = [preferred]
-    for choice in choices:
-        if choice in hay:
-            return True
-    return False
-
-
-def _constraint_gap_reasons(candidate: dict, profile: "UserProfile | None") -> list[str]:
-    if not profile:
-        return []
-    gaps: list[str] = []
-
-    desired_role = _safe_str(profile.desiredRole)
-    preferred_location = _safe_str(profile.location)
-    preferred_work_type = _normalize_work_type(profile.workType if profile.workType != "Any" else "")
-
-    if desired_role and not _role_matches_preference(candidate, desired_role):
-        gaps.append(f"role mismatch (wanted: {desired_role})")
-    if preferred_location and not _location_matches_preference(candidate, preferred_location):
-        gaps.append(f"location mismatch (wanted: {preferred_location})")
-
-    if preferred_work_type:
-        candidate_work_type = _normalize_work_type(_safe_str(candidate.get("work_type", "")))
-        if not candidate_work_type:
-            gaps.append(f"work type missing (wanted: {profile.workType})")
-        elif candidate_work_type != preferred_work_type:
-            gaps.append(f"work type mismatch (wanted: {profile.workType})")
-    return gaps
-
-
-def _prioritize_candidates_by_constraints(
-    candidates: list[dict],
-    profile: "UserProfile | None",
-    top_n: int,
-) -> tuple[list[dict], int, int]:
-    if not candidates:
-        return [], 0, 0
-
-    if not profile:
-        top_count = min(len(candidates), max(0, top_n))
-        return [dict(c) for c in candidates], top_count, 0
-
-    has_constraints = bool(
-        _safe_str(profile.desiredRole)
-        or _safe_str(profile.location)
-        or (profile.workType and profile.workType != "Any")
-    )
-    if not has_constraints:
-        top_count = min(len(candidates), max(0, top_n))
-        enriched = [dict(c) for c in candidates]
-        for item in enriched:
-            item["constraint_gaps"] = []
-        return enriched, top_count, 0
-
-    exact: list[tuple[int, dict]] = []
-    relaxed: list[tuple[int, dict]] = []
-    enriched: list[tuple[int, dict]] = []
-    for idx, candidate in enumerate(candidates):
-        item = dict(candidate)
-        gaps = _constraint_gap_reasons(item, profile)
-        item["constraint_gaps"] = gaps
-        item["matches_all_selected_constraints"] = not gaps
-        enriched.append((idx, item))
-        if gaps:
-            relaxed.append((idx, item))
-        else:
-            exact.append((idx, item))
-
-    top_n = max(0, int(top_n))
-    selected_exact = exact[:top_n]
-    remaining_slots = max(0, top_n - len(selected_exact))
-    selected_relaxed = relaxed[:remaining_slots]
-
-    selected_ids = {idx for idx, _ in (selected_exact + selected_relaxed)}
-    selected = selected_exact + selected_relaxed
-    remainder = [(idx, item) for idx, item in enriched if idx not in selected_ids]
-    reordered = [item for _, item in selected + remainder]
-
-    return reordered, len(selected_exact), len(selected_relaxed)
-
-
 def _retrieval_fingerprint(candidates: list[dict]) -> str:
     stable_rows = []
     for candidate in candidates:
@@ -3112,45 +2987,15 @@ OUTPUT FORMAT — copy this structure EXACTLY:
 ## Summary
 - Jobs Analyzed: <total count from input>
 - Top Matches: {top_n}
-- Matches That Satisfy All Selected Constraints: {exact_n}
-- Other Recommended Matches: {relaxed_n}
 - Best Match Score: <highest score>/10
 
-## Top Job Matches (Matching Your Preferences)
-(List exactly {exact_n} jobs from the top of the candidate list with no constraint mismatches. If {exact_n}=0, write one bullet saying none were found.)
+## Top Job Matches
 
 ### <Job Title> @ <Company Name>
 - **Match Score: <N>/10 | Location: <City, Country> | Salary: <range>**
 - **Role:** <specific role level/team if known>
 - **Apply Link:** <URL if available, else "Not provided">
 - **Job Description:** <1-2 sentence factual summary from provided data>
-
-**Why It Matches:**
-- <Specific skill or experience from user profile that maps to this job>
-- <Another concrete alignment — mention actual skill/role names>
-- <Third reason — can include work type, sector, or company size fit>
-
-**Gaps:**
-- <Specific missing skill, qualification, or experience — be honest>
-
-**Experience Alignment:** <One sentence comparing user's years/level to the job's requirement>
-
-**Recommended Next Steps:**
-1. <Concrete action specific to THIS job>
-2. <Another specific action>
-3. <Third action>
-
----
-
-## Other Recommended Jobs (Did Not Fully Match Your Constraints)
-(List exactly {relaxed_n} jobs from the remaining top-ranked candidate list. For each job, include a Constraint Gaps line explaining what did not match, such as location or work type.)
-
-### <Job Title> @ <Company Name>
-- **Match Score: <N>/10 | Location: <City, Country> | Salary: <range>**
-- **Role:** <specific role level/team if known>
-- **Apply Link:** <URL if available, else "Not provided">
-- **Job Description:** <1-2 sentence factual summary from provided data>
-- **Constraint Gaps:** <e.g., location mismatch, work type mismatch, role mismatch>
 
 **Why It Matches:**
 - <Specific skill or experience from user profile that maps to this job>
@@ -3170,7 +3015,7 @@ OUTPUT FORMAT — copy this structure EXACTLY:
 ---
 
 ### <next job title> @ <company>
-(repeat the exact block above for all jobs across both sections)
+(repeat the exact block above for all {top_n} jobs)
 
 ## Overall Recommended Next Steps
 1. <Broad career advice>
@@ -3186,20 +3031,12 @@ STRICT RULES:
 - Output plain markdown only — no XML tags, no JSON
 """.strip()
 
-def build_llm_prompt(
-    user_query: str,
-    candidates: list[dict],
-    resume_text: str = "",
-    exact_count: int = 0,
-    relaxed_count: int = 0,
-) -> str:
+def build_llm_prompt(user_query: str, candidates: list[dict], resume_text: str = "") -> str:
     candidate_text = ""
     for i, c in enumerate(candidates, 1):
         skills = ", ".join(_clean_untrusted_text(s, 80) for s in c.get("skills", [])[:12])
         benefits = ", ".join(_clean_untrusted_text(b, 80) for b in c.get("benefits", [])[:5])
         score_val = float(c.get("score", 0) or 0)
-        gaps = c.get("constraint_gaps", []) if isinstance(c.get("constraint_gaps"), list) else []
-        gap_text = ", ".join(_clean_untrusted_text(g, 120) for g in gaps if _safe_str(g)) if gaps else "none"
         candidate_text += (
             f"[Candidate {i}] (similarity: {score_val:.3f}, rerank position: {c.get('rerank_position', i)})\n"
             f"Title: {_clean_untrusted_text(c.get('title', ''), 140)} | Role: {_clean_untrusted_text(c.get('role', ''), 140)}\n"
@@ -3212,7 +3049,6 @@ def build_llm_prompt(
             f"Benefits: {benefits}\n"
             f"Description: {_clean_untrusted_text(c.get('description', ''), 350)}\n"
             f"Responsibilities: {_clean_untrusted_text(c.get('responsibilities', ''), 200)}\n"
-            f"Constraint Gaps: {gap_text}\n"
             "---\n"
         )
     cv_section = ""
@@ -3222,24 +3058,11 @@ def build_llm_prompt(
         f"USER PROFILE & JOB REQUEST:\n{user_query}\n{cv_section}\n"
         f"CANDIDATE JOB POSTINGS ({len(candidates)} retrieved by semantic search, already reranked):\n"
         f"{candidate_text}\n"
-        f"The candidates are already sorted best-to-worst by a deterministic reranker. "
-        f"Use exactly the first {TOP_N_RESULTS} candidates in the same order and respond in the required Markdown format. "
-        f"In those first {TOP_N_RESULTS}, place the first {exact_count} in 'Top Job Matches (Matching Your Preferences)' "
-        f"and the next {relaxed_count} in 'Other Recommended Jobs (Did Not Fully Match Your Constraints)'."
+        f"Select the top {TOP_N_RESULTS} best matches for this user and respond in the required Markdown format."
     )
 
-def _basic_jobmatch_markdown(
-    candidates: list[dict],
-    note: str = "",
-    exact_count: int = 0,
-    relaxed_count: int = 0,
-) -> str:
-    top = candidates[: max(0, TOP_N_RESULTS)]
-    exact_count = max(0, min(exact_count, len(top)))
-    relaxed_count = max(0, min(relaxed_count, max(0, len(top) - exact_count)))
-    exact_jobs = top[:exact_count]
-    relaxed_jobs = top[exact_count: exact_count + relaxed_count]
-
+def _basic_jobmatch_markdown(candidates: list[dict], note: str = "") -> str:
+    top = candidates[: max(1, TOP_N_RESULTS)]
     best_score = 0.0
     if top:
         best_score = round(float(top[0].get("deterministic_score", top[0].get("score", 0)) or 0) * 10, 1)
@@ -3249,19 +3072,12 @@ def _basic_jobmatch_markdown(
         "## Summary",
         f"- Jobs Analyzed: {len(candidates)}",
         f"- Top Matches: {len(top)}",
-        f"- Matches That Satisfy All Selected Constraints: {len(exact_jobs)}",
-        f"- Other Recommended Matches: {len(relaxed_jobs)}",
         f"- Best Match Score: {best_score}/10",
         "",
-        "## Top Job Matches (Matching Your Preferences)",
+        "## Top Job Matches",
         "",
     ]
-
-    if not exact_jobs:
-        lines.append("- No jobs in this batch fully matched all selected constraints.")
-        lines.append("")
-
-    for c in exact_jobs:
+    for c in top:
         title = _clean_untrusted_text(c.get("title", "Unknown Role"), 140) or "Unknown Role"
         company = _clean_untrusted_text(c.get("company", "Unknown Company"), 120) or "Unknown Company"
         location = ", ".join([_clean_untrusted_text(x, 100) for x in [c.get("location", ""), c.get("country", "")] if x]) or "N/A"
@@ -3276,37 +3092,6 @@ def _basic_jobmatch_markdown(
             f"- Role: {_clean_untrusted_text(c.get('role', ''), 140) or 'Not specified'}",
             f"- Apply Link: {_clean_untrusted_text(c.get('external_url', ''), 240) or 'Not provided'}",
             f"- Job Description: {_clean_untrusted_text(c.get('description', ''), 220) or 'Not provided'}",
-            f"- Skills: {skills}",
-            "",
-        ])
-
-    lines.extend([
-        "## Other Recommended Jobs (Did Not Fully Match Your Constraints)",
-        "",
-    ])
-
-    if not relaxed_jobs:
-        lines.append("- No additional recommendations outside your selected constraints.")
-        lines.append("")
-
-    for c in relaxed_jobs:
-        title = _clean_untrusted_text(c.get("title", "Unknown Role"), 140) or "Unknown Role"
-        company = _clean_untrusted_text(c.get("company", "Unknown Company"), 120) or "Unknown Company"
-        location = ", ".join([_clean_untrusted_text(x, 100) for x in [c.get("location", ""), c.get("country", "")] if x]) or "N/A"
-        salary = _clean_untrusted_text(c.get("salary", "Not listed"), 120) or "Not listed"
-        skills = ", ".join(_clean_untrusted_text(s, 80) for s in c.get("skills", [])[:6]) or "Not listed"
-        display_score = round(float(c.get("deterministic_score", c.get("score", 0)) or 0) * 10, 1)
-        gaps = c.get("constraint_gaps", []) if isinstance(c.get("constraint_gaps"), list) else []
-        gap_text = ", ".join(_clean_untrusted_text(g, 120) for g in gaps if _safe_str(g)) or "not specified"
-        lines.extend([
-            f"### {title} @ {company}",
-            f"- Match Score: {display_score}/10",
-            f"- Location: {location}",
-            f"- Salary: {salary}",
-            f"- Role: {_clean_untrusted_text(c.get('role', ''), 140) or 'Not specified'}",
-            f"- Apply Link: {_clean_untrusted_text(c.get('external_url', ''), 240) or 'Not provided'}",
-            f"- Job Description: {_clean_untrusted_text(c.get('description', ''), 220) or 'Not provided'}",
-            f"- Constraint Gaps: {gap_text}",
             f"- Skills: {skills}",
             "",
         ])
@@ -3474,14 +3259,7 @@ def _llm_job_ranking_enabled() -> bool:
     return bool(GOOGLE_API_KEY) and _GENAI_AVAILABLE and ENABLE_LLM_JOB_RANKING
 
 
-def generate_response(
-    user_query: str,
-    candidates: list[dict],
-    history: list = None,
-    resume_text: str = "",
-    exact_count: int = 0,
-    relaxed_count: int = 0,
-) -> str:
+def generate_response(user_query: str, candidates: list[dict], history: list = None, resume_text: str = "") -> str:
     candidates_for_llm = candidates
     ranked_candidates = rank_candidates_deterministically(user_query, candidates_for_llm)
     if not _llm_job_ranking_enabled():
@@ -3490,20 +3268,13 @@ def generate_response(
             note = "GOOGLE_API_KEY is not configured, so results use deterministic retrieval ranking."
         elif not ENABLE_LLM_JOB_RANKING:
             note = "ENABLE_LLM_JOB_RANKING is disabled, so results use deterministic retrieval ranking."
-        return _basic_jobmatch_markdown(
-            ranked_candidates,
-            note,
-            exact_count=exact_count,
-            relaxed_count=relaxed_count,
-        )
+        return _basic_jobmatch_markdown(ranked_candidates, note)
 
-    system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS, exact_n=exact_count, relaxed_n=relaxed_count)
+    system = SYSTEM_PROMPT.format(top_n=TOP_N_RESULTS)
     user_msg = build_llm_prompt(
         _clean_untrusted_text(user_query, 2400),
-        candidates_for_llm[:TOP_N_RESULTS],
+        candidates_for_llm[:10],
         resume_text=resume_text,
-        exact_count=exact_count,
-        relaxed_count=relaxed_count,
     )
     full_prompt = f"{system}\n\n{user_msg}"
     # Gemma 4 uses a reasoning/thinking mode and needs more tokens (thinking + output)
@@ -3517,8 +3288,6 @@ def generate_response(
         return _basic_jobmatch_markdown(
             ranked_candidates,
             "AI ranking is temporarily unavailable, so these results use deterministic retrieval ranking.",
-            exact_count=exact_count,
-            relaxed_count=relaxed_count,
         )
 
     # Gemma can prepend reasoning before the final markdown block.
@@ -3528,7 +3297,7 @@ def generate_response(
         text = text[idx:]
     elif "### " in text:
         # No heading but has job blocks — prepend the heading so frontend parses it
-        text = f"{marker}\n\n## Top Job Matches (Matching Your Preferences)\n\n{text}"
+        text = f"{marker}\n\n## Top Job Matches\n\n{text}"
 
     if not _is_renderable_jobmatch_output(text):
         log.warning("Gemini/Gemma output was not renderable by frontend parser; using deterministic fallback.")
@@ -3536,27 +3305,6 @@ def generate_response(
         return _basic_jobmatch_markdown(
             ranked_candidates,
             "AI output format was inconsistent, so a reliable fallback format was used.",
-            exact_count=exact_count,
-            relaxed_count=relaxed_count,
-        )
-
-    # Enforce deterministic top-job identities even when using LLM-generated reasoning text.
-    expected = [
-        (
-            _safe_str(c.get("title", "")).lower(),
-            _safe_str(c.get("company", "")).lower(),
-        )
-        for c in candidates[: max(1, TOP_N_RESULTS)]
-    ]
-    actual = _extract_job_headings(text)[: len(expected)]
-    if not actual or actual != expected[: len(actual)]:
-        log.warning("LLM response changed ranked jobs/order; falling back to deterministic output.")
-        ranked_candidates = rank_candidates_deterministically(user_query, candidates)
-        return _basic_jobmatch_markdown(
-            ranked_candidates,
-            "Results are pinned to deterministic ranking for repeatable top-job ordering.",
-            exact_count=exact_count,
-            relaxed_count=relaxed_count,
         )
     return text
 
@@ -3667,32 +3415,11 @@ async def webhook(request: Request):
     candidates = _rerank_candidates(candidates, profile_for_rerank)
     log.info("[%s] Reranked %d candidates; top: %s", request_id, len(candidates), candidates[0].get("title", "") if candidates else "none")
 
-    candidates, exact_count, relaxed_count = _prioritize_candidates_by_constraints(
-        candidates,
-        req.profile if req.profile else None,
-        TOP_N_RESULTS,
-    )
-    log.info(
-        "[%s] Constraint partition: exact=%d relaxed=%d (top_n=%d)",
-        request_id,
-        exact_count,
-        relaxed_count,
-        TOP_N_RESULTS,
-    )
-
     try:
         # Run blocking Gemma call in a thread so the async event loop stays healthy
         resume_text = (req.profile.resumeText if req.profile else None) or req.resumeText or ""
         _t_gen_start = time.perf_counter()
-        output = await asyncio.to_thread(
-            generate_response,
-            query,
-            candidates,
-            history,
-            resume_text,
-            exact_count,
-            relaxed_count,
-        )
+        output = await asyncio.to_thread(generate_response, query, candidates, history, resume_text)
         _generation_latency_ms = (time.perf_counter() - _t_gen_start) * 1000
     except Exception as exc:
         log.exception("LLM generation failed")
@@ -3777,18 +3504,7 @@ async def debug_rag_trace(request: Request, req: DebugRetrievalRequest):
         candidates = _rerank_candidates(candidates, req.profile)
     if not _gemma_job_results_enabled():
         candidates = rank_candidates_deterministically(query, candidates)
-    candidates, exact_count, relaxed_count = _prioritize_candidates_by_constraints(
-        candidates,
-        req.profile if req.profile else None,
-        TOP_N_RESULTS,
-    )
-    prompt = build_llm_prompt(
-        query,
-        candidates,
-        resume_text=(req.profile.resumeText if req.profile else ""),
-        exact_count=exact_count,
-        relaxed_count=relaxed_count,
-    )
+    prompt = build_llm_prompt(query, candidates, resume_text=(req.profile.resumeText if req.profile else ""))
 
     tokens = set(_tokenize_query(query))
     traced = []

@@ -806,7 +806,6 @@ function buildPrompt(p) {
 }
 
 function getCurrentProfileFromForm() {
-  const additionalField = document.getElementById('additional');
   return {
     name: document.getElementById('fullName').value.trim(),
     email: document.getElementById('email').value.trim(),
@@ -821,7 +820,7 @@ function getCurrentProfileFromForm() {
     companySize: document.getElementById('companySize').value.trim() || 'Any',
     benefits: [],
     workAuth: document.getElementById('workAuth').value.trim() || 'Not Specified',
-    additional: additionalField ? additionalField.value.trim() : '',
+    additional: document.getElementById('additional').value.trim(),
   };
 }
 
@@ -1344,44 +1343,6 @@ saveApplicationStatusBtn?.addEventListener('click', async () => {
   }
 });
 
-async function openRetrievalDebug() {
-  const profile = getCurrentProfileFromForm();
-  if (!profile.desiredRole && profile.skills.length === 0) {
-    alert('Fill at least role or skills before running retrieval debug.');
-    return;
-  }
-  retrievalDebugContent.textContent = 'Loading retrieval debug...';
-  retrievalDebugModal?.classList.remove('hidden');
-  const headers = AUTH.headers();
-  try {
-    const res = await fetch(CONFIG.API_BASE_URL + '/debug/retrieval', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ profile, topK: 12 }),
-    });
-    if (!res.ok) {
-      const d = await res.json().catch(() => ({}));
-      throw new Error(d.detail || `Debug retrieval failed (${res.status})`);
-    }
-    const data = await res.json();
-    const lines = [];
-    lines.push(`Query: ${data.query}`);
-    lines.push(`Top K: ${data.top_k} | Returned: ${data.count}`);
-    lines.push('');
-    (data.candidates || []).forEach((c, i) => {
-      lines.push(`${i + 1}. ${c.title || 'Untitled'} @ ${c.company || 'Unknown'}`);
-      lines.push(`   score=${c.score} | semantic=${c.semantic_score} | lexical=${c.lexical_score}`);
-      lines.push(`   ${c.location || ''}${c.country ? ', ' + c.country : ''} | ${c.work_type || 'n/a'} | ${c.salary || 'n/a'}`);
-      if (c.skills && c.skills.length) lines.push(`   skills: ${c.skills.join(', ')}`);
-      if (c.source || c.external_url) lines.push(`   source: ${c.source || 'n/a'} ${c.external_url || ''}`);
-      lines.push('');
-    });
-    retrievalDebugContent.textContent = lines.join('\n').trim();
-  } catch (err) {
-    retrievalDebugContent.textContent = 'Error: ' + (err.message || String(err));
-  }
-}
-
 function appKey(jobTitle, company) {
   return `${normalizeJobField(jobTitle)}|${normalizeJobField(company)}`;
 }
@@ -1625,7 +1586,6 @@ function renderMatchesSection(section) {
   const jobs = [];
   const lines = section.content.split('\n');
   let currentJob = null;
-  const sectionTitle = (section?.title || 'Top Matches').trim();
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -1646,7 +1606,7 @@ function renderMatchesSection(section) {
   let html = '<div class="matches-section">';
   html += `<div class="matches-header">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg>
-    <span>${esc(sectionTitle)}</span>
+    <span>Top Matches</span>
     <span class="matches-count">${validJobs.length} found</span>
   </div>`;
 
